@@ -103,6 +103,7 @@ async function bootstrap(): Promise<void> {
     battleCam: true,
     soundEnabled: true,
     theme: 'gothic',
+    pieceStyle: 'theme-default',
     musicEnabled: true,
     musicSource: 'auto',
   };
@@ -149,6 +150,7 @@ async function bootstrap(): Promise<void> {
   hud.setLoadingProgress(35, 'Igniting Braziers & Combat Runes...');
   const combatFX = new CombatFX(cathedral.scene);
   const pieceFactory = new PieceFactory();
+  pieceFactory.setPieceStyle(settings.pieceStyle);
   await pieceFactory.preload((pct, label) => {
     hud.setLoadingProgress(40 + Math.round(pct * 0.35), label);
   });
@@ -594,7 +596,7 @@ async function bootstrap(): Promise<void> {
     clearSelection();
   }
 
-  async function applyThemeInternal(themeId: ThemeId): Promise<void> {
+  async function applyThemeInternal(themeId: ThemeId, syncRealm = true): Promise<void> {
     const myEpoch = ++themeSwitchEpoch;
     settings = { ...settings, theme: themeId };
     const cfg = THEMES[themeId];
@@ -613,9 +615,11 @@ async function bootstrap(): Promise<void> {
 
       if (myEpoch !== themeSwitchEpoch || settings.theme !== themeId) return;
 
-      cathedral.setTheme(themeId);
-      combatFX.setTheme(themeId);
-      musicEngine.setTheme(themeId);
+      if (syncRealm) {
+        cathedral.setTheme(themeId);
+        combatFX.setTheme(themeId);
+        musicEngine.setTheme(themeId);
+      }
 
       // Rebuild all living pieces in their current FEN squares using the new realm's 3D army
       for (const [id, existing] of piecesMap.entries()) {
@@ -748,8 +752,16 @@ async function bootstrap(): Promise<void> {
       musicEngine.setMusicSource(settings.musicSource);
     }
 
-    if (patch.theme !== undefined && patch.theme !== prev.theme) {
-      void applyThemeInternal(patch.theme);
+    const themeChanged = patch.theme !== undefined && patch.theme !== prev.theme;
+    const styleChanged =
+      patch.pieceStyle !== undefined && patch.pieceStyle !== prev.pieceStyle;
+
+    if (styleChanged) {
+      pieceFactory.setPieceStyle(settings.pieceStyle);
+    }
+
+    if (themeChanged || styleChanged) {
+      void applyThemeInternal(settings.theme, themeChanged);
     }
 
     const sideOrModeChanged =

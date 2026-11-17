@@ -690,6 +690,13 @@ body {
   outline-offset: 1px;
 }
 
+.piece-style-grid {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  padding: 3px;
+}
+
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -7,6 +7,7 @@ import type {
   GameSnapshot,
   MusicSourceMode,
   PieceColor,
+  PieceStylePreference,
   PieceType,
   ThemeId,
 } from '../types';
@@ -154,6 +155,7 @@ export class HudOverlay {
   // Lobby modal elements
   private lobbyBackdropEl!: HTMLElement;
   private themeButtons!: NodeListOf<HTMLButtonElement>;
+  private pieceStyleButtons!: NodeListOf<HTMLButtonElement>;
   private modeButtons!: NodeListOf<HTMLButtonElement>;
   private difficultyButtons!: NodeListOf<HTMLButtonElement>;
   private sideButtons!: NodeListOf<HTMLButtonElement>;
@@ -544,6 +546,30 @@ export class HudOverlay {
               </div>
 
               <div class="field-group">
+                <span class="field-label">3D Piece Sculpt</span>
+                <div class="seg-group piece-style-grid" role="group" aria-label="Piece Sculpt">
+                  <button type="button" class="seg-btn is-active" data-setting-piece-style="theme-default">
+                    Realm Default
+                  </button>
+                  <button type="button" class="seg-btn" data-setting-piece-style="sovereign">
+                    Sovereign
+                  </button>
+                  <button type="button" class="seg-btn" data-setting-piece-style="crusader">
+                    Crusader
+                  </button>
+                  <button type="button" class="seg-btn" data-setting-piece-style="samurai">
+                    Samurai
+                  </button>
+                  <button type="button" class="seg-btn" data-setting-piece-style="pharaoh">
+                    Pharaoh
+                  </button>
+                  <button type="button" class="seg-btn" data-setting-piece-style="astral">
+                    Astral
+                  </button>
+                </div>
+              </div>
+
+              <div class="field-group">
                 <span class="field-label">Tactical Presets</span>
                 <div class="preset-row" role="group" aria-label="Tactical Presets">
                   <button
@@ -639,6 +665,7 @@ export class HudOverlay {
 
     this.lobbyBackdropEl = this.query('[data-role="lobby-backdrop"]');
     this.themeButtons = this.container.querySelectorAll('[data-setting-theme]');
+    this.pieceStyleButtons = this.container.querySelectorAll('[data-setting-piece-style]');
     this.modeButtons = this.container.querySelectorAll('[data-setting-mode]');
     this.difficultyButtons = this.container.querySelectorAll('[data-setting-difficulty]');
     this.sideButtons = this.container.querySelectorAll('[data-setting-side]');
@@ -749,6 +776,15 @@ export class HudOverlay {
         const theme = btn.dataset.settingTheme as ThemeId | undefined;
         if (theme) {
           this.applySettingsPatch({ theme });
+        }
+      });
+    });
+
+    this.pieceStyleButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const pieceStyle = btn.dataset.settingPieceStyle as PieceStylePreference | undefined;
+        if (pieceStyle) {
+          this.applySettingsPatch({ pieceStyle });
         }
       });
     });
@@ -917,6 +953,7 @@ export class HudOverlay {
       battleCam,
       soundEnabled,
       theme,
+      pieceStyle,
       musicEnabled,
       musicSource,
     } = this.settings;
@@ -974,6 +1011,9 @@ export class HudOverlay {
     // Lobby controls
     this.themeButtons.forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.settingTheme === theme);
+    });
+    this.pieceStyleButtons.forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.settingPieceStyle === pieceStyle);
     });
     this.modeButtons.forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.settingMode === mode);

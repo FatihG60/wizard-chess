@@ -3,21 +3,37 @@
 ![Three.js](https://img.shields.io/badge/Three.js-0.187-0f172a?style=flat-square&logo=threedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-7.0-1e293b?style=flat-square&logo=typescript&logoColor=3178c6)
 ![chess.js](https://img.shields.io/badge/chess.js-1.4.0-1e293b?style=flat-square)
-![Blender GLB](https://img.shields.io/badge/Blender_5.3-8_GLB_Armies-1e293b?style=flat-square&logo=blender&logoColor=ea7600)
+![Blender GLB](https://img.shields.io/badge/Blender_5.3-5_Sculpted_Armies_(10_GLBs)-1e293b?style=flat-square&logo=blender&logoColor=ea7600)
 ![Vite](https://img.shields.io/badge/Vite-8.3-1e293b?style=flat-square&logo=vite&logoColor=ffd62e)
 ![Vitest](https://img.shields.io/badge/Vitest-17%2F17_Passing-14532d?style=flat-square&logo=vitest&logoColor=white)
 
-An interactive 3D Wizard's Chess web game featuring **6 playable 3D realms**, **8 headless-Blender sculpted `.glb` armies** (with procedural Three.js PBR fallback), **Voronoi piece-shattering combat physics**, **adaptive realm music & Web Audio SFX**, and a **non-blocking Alpha-Beta + Quiescence chess AI** — inspired by the Google Antigravity / Gemini 4 Argon showcase.
+An interactive 3D Wizard's Chess web game featuring **6 playable 3D realms**, **5 Blender 5.3 sculpted `.glb` army sets (10 files — led by the collector-grade Sovereign Reliquary sculpts)** with procedural Three.js PBR fallback, an in-game **3D Piece Sculpt** hot-swapper, **Voronoi piece-shattering combat physics**, **adaptive realm music & Web Audio SFX**, and a **non-blocking Alpha-Beta + Quiescence chess AI**.
 
-*(TR)* **6 oynanabilir 3D diyar**, **8 adet Blender `.glb` satranc ordusu** (prosedurel Three.js PBR yedek motoruyla), **Voronoi tas parcalama fizigi**, **diyarlara ozel adaptif muzik + Web Audio ses efektleri** ve **Alpha-Beta + Quiescence yapay zekasi** ile gelistirilen etkilesimli 3D Wizard's Chess oyunu.
+*(TR)* **6 oynanabilir 3D diyar**, basrolde yuksek detayli **Sovereign Reliquary** setinin yer aldigi **5 farkli Blender 5.3 `.glb` satranc ordusu (10 dosya)** ve oyun ici **3D Piece Sculpt** degistiricisi, **Voronoi tas parcalama fizigi**, **diyarlara ozel adaptif muzik + Web Audio ses efektleri** ve **Alpha-Beta + Quiescence yapay zekasi** ile gelistirilen etkilesimli 3D Wizard's Chess oyunu.
 
-![Gothic Sanctum — 3D Wizard's Chess](docs/screenshots/01-gothic-sanctum.png)
+![Gothic Sanctum — Sovereign Reliquary 3D Wizard's Chess](docs/screenshots/01-gothic-sanctum.png)
 
 ---
 
 ## Visual Gallery / Ekran Goruntuleri
 
 <table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/screenshots/00-sovereign-studio.png" alt="Blender 5.3 Sovereign Reliquary Studio Lineup" />
+      <br />
+      <strong>Sovereign Reliquary (Blender 5.3 Studio Render)</strong>
+      <br />
+      <sub>Multi-part reliquary plinths, pleated velvet cloaks, winged Valkyrie silhouettes &amp; radiant halos</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/screenshots/04-frost-citadel.png" alt="Frost Citadel — Glacial Sovereign Override" />
+      <br />
+      <strong>Frost Citadel (Glacial Sovereign PBR Override)</strong>
+      <br />
+      <sub>Dynamic ice-marble, sapphire velvet cloaks, glowing crystal inlays &amp; falling snow</sub>
+    </td>
+  </tr>
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/02-tactical-topdown.png" alt="Tactical Top-Down &amp; Legal Move Highlights" />
@@ -72,22 +88,22 @@ An interactive 3D Wizard's Chess web game featuring **6 playable 3D realms**, **
 
 ## 6 Playable Realms & 3D Armies / 6 Diyar ve 3D Ordular
 
-Every realm transforms the architectural columns, stained-glass moonlight beams, flaming braziers, runic board border, atmospheric particle system, combat VFX palette, 3D army geometry, and adaptive musical score (`src/themes.ts` + `src/ui/MusicEngine.ts`):
+Every realm transforms the architectural columns, stained-glass moonlight beams, flaming braziers, runic board border, atmospheric particle system, combat VFX palette, 3D army geometry, and adaptive musical score (`src/themes.ts` + `src/ui/MusicEngine.ts`). You can also override the 3D piece sculpt in any realm via the **3D Piece Sculpt** selector in the Lobby (`Realm Default`, `Sovereign`, `Crusader`, `Samurai`, `Pharaoh`, `Astral`):
 
-| Realm | Army Name | GLB Model Set | Board Runes | Atmosphere &amp; Particles | Adaptive Score |
+| Realm | Default Army | GLB Model Set | Board Runes | Atmosphere &amp; Particles | Adaptive Score |
 |---|---|---|---|---|---|
-| **Gothic Sanctum** | Crusader Order | `wizard_white.glb` / `wizard_black.glb` | Elder Futhark | Cathedral dust motes &amp; firelight | D Dorian Choir &amp; Video OST |
+| **Gothic Sanctum** | Sovereign Reliquary | `sovereign_white.glb` / `sovereign_black.glb` | Elder Futhark | Cathedral dust motes &amp; firelight | D Dorian Choir &amp; Video OST |
 | **Shogun Dojo** | Shogunate | `samurai_white.glb` / `samurai_black.glb` | Samurai Mon &amp; Kanji | Drifting sakura petals &amp; shoji glow | Hirajoshi Pentatonic Koto &amp; Taiko |
 | **Pharaoh's Temple** | Solar Dynasty | `pharaoh_white.glb` / `pharaoh_black.glb` | Egyptian Hieroglyphs | Desert sunbeams &amp; gold dust | Phrygian Dominant (Hijaz) Oud &amp; Ney |
-| **Frost Citadel** | Glacial Guard | `wizard_*` (Glacial PBR override) | Elder Futhark | Falling snow &amp; aurora stained glass | Nordic Crystal Harp &amp; Glacial Winds |
-| **Infernal Forge** | Obsidian Hellforge | `wizard_*` (Hellforge PBR override) | Elder Futhark | Rising forge embers &amp; magma windows | Deep Phrygian War Drums &amp; Brass |
+| **Frost Citadel** | Glacial Guard (Sovereign) | `sovereign_*` (Glacial PBR + Gem override) | Elder Futhark | Falling snow &amp; aurora stained glass | Nordic Crystal Harp &amp; Glacial Winds |
+| **Infernal Forge** | Obsidian Hellforge (Sovereign) | `sovereign_*` (Hellforge PBR + Gem override) | Elder Futhark | Rising forge embers &amp; magma windows | Deep Phrygian War Drums &amp; Brass |
 | **Astral Observatory** | Celestial Archons | `astral_white.glb` / `astral_black.glb` | Astral Sigils | Floating starlight &amp; nebula glass | Lydian Celesta &amp; Cosmic Shimmer |
 
 ---
 
 ## Core Features / Temel Ozellikler
 
-- **Blender GLB Armies + Procedural PBR Fallback (`PieceFactory.ts`)**: Loads 8 articulated `.glb` army packs (`public/models/*.glb`) generated via headless Blender 5.3 scripts (`Piece_<type>` / `Pivot_Body` / `Pivot_Head` / `Pivot_WeaponArm` / `Pivot_ShieldArm`), seamlessly falling back to sculpted Three.js `LatheGeometry` / `ExtrudeGeometry` / `TubeGeometry` rigs when offline or in pure-code environments.
+- **Blender GLB Armies + 3D Sculpt Hot-Swap + Procedural Fallback (`PieceFactory.ts`)**: Loads 5 articulated `.glb` army packs (`10` models in `public/models/*.glb`) generated via headless Blender 5.3 scripts (`Piece_<type>` / `Pivot_Body` / `Pivot_Head` / `Pivot_WeaponArm` / `Pivot_ShieldArm`), including the multi-material **Sovereign Reliquary** set (`build_sovereign_pieces.py`) with dynamic realm overrides for stone, metal trim, velvet cloaks, and emissive arcane gems. Falls back seamlessly to sculpted Three.js `LatheGeometry` / `ExtrudeGeometry` / `TubeGeometry` rigs when offline.
 - **Wizard's Chess Combat Choreography & Shatter Physics (`PieceAnimator.ts`, `CombatFX.ts`)**: Per-archetype attack swings, knight arched leaps, dynamic Battle Camera swoops, camera shake, 24+ Voronoi stone/obsidian/ivory/gold debris shards with floor bounce, billowing smoke clouds, and defeated King bow animations on checkmate.
 - **FIDE Chess Engine & Async Alpha-Beta AI (`ChessController.ts`, `ChessAI.ts`)**: Complete `chess.js` rule enforcement (castling, en passant, promotion, check/checkmate, stalemate, threefold repetition, undo with persistent 3D piece IDs) paired with an asynchronous Alpha-Beta AI (`Novice`, `Adept`, `Grandmaster`) featuring transposition tables, MVV-LVA move ordering, tapered Piece-Square Tables, and quiescence capture search.
 - **Adaptive Music & Procedural Acoustics (`MusicEngine.ts`, `SoundFX.ts`)**: Supports both the extracted reference soundtrack (`public/audio/gothic_video_ost.mp3`) and 6 procedural Web Audio realm scores + ambient environments (`fire`, `wind-chimes`, `desert`, `blizzard`, `forge`, `cosmos`) that raise tension during Check, alongside zero-asset Web Audio stone/steel/brass SFX.
@@ -105,6 +121,8 @@ wizard-chess/
 │   ├── audio/
 │   │   └── gothic_video_ost.mp3         # Reference Gothic soundtrack
 │   └── models/                          # Articulated Blender 5.3 GLB army packs (White & Black)
+│       ├── sovereign_white.glb          # Sovereign Reliquary (White — collector-grade)
+│       ├── sovereign_black.glb          # Sovereign Reliquary (Black — collector-grade)
 │       ├── wizard_white.glb             # Crusader Order (White)
 │       ├── wizard_black.glb             # Crusader Order (Black)
 │       ├── samurai_white.glb            # Shogunate (White)
@@ -115,6 +133,7 @@ wizard-chess/
 │       └── astral_black.glb             # Celestial Archons (Black)
 ├── scripts/
 │   └── blender/
+│       ├── build_sovereign_pieces.py    # Headless Blender 5.3 generator for Sovereign Reliquary GLBs
 │       ├── build_wizard_pieces.py       # Headless Blender generator for Crusader GLBs
 │       └── build_theme_armies.py        # Headless Blender generator for Samurai, Pharaoh & Astral GLBs
 ├── index.html                           # App shell, Google Fonts (Cinzel, Inter), #canvas-root & #hud-root
@@ -168,6 +187,7 @@ npm test
 The repository already ships pre-built `.glb` files in `public/models/`. If you have **Blender 5.x** installed and want to regenerate the 3D armies from Python (`bmesh`) sources:
 
 ```bash
+blender --background --python scripts/blender/build_sovereign_pieces.py
 blender --background --python scripts/blender/build_wizard_pieces.py
 blender --background --python scripts/blender/build_theme_armies.py
 ```
@@ -178,4 +198,4 @@ blender --background --python scripts/blender/build_theme_armies.py
 
 - **Select & Move**: Click a friendly piece (or its square) to preview cyan quiet-move discs and crimson capture rings, then click a highlighted destination — or drag and drop directly onto a valid square.
 - **Camera**: Drag empty space or right-click drag to orbit, scroll wheel to zoom, or toggle between **Sanctum Orbit** (`player`) and **Tactical Top-Down** (`top-down`) via the top-right bar or Lobby.
-- **Realms & Audio**: Click the Realm button in the top-right bar to cycle through all 6 3D realms live, or open **Lobby** to switch armies, AI difficulty (`Novice`, `Adept`, `Grandmaster`), side (`White`/`Black`), Music Score (`Auto`, `Realm Score`, `Video OST`), enter SAN/coordinate moves directly, load tactical presets, or undo moves.
+- **Realms & Audio**: Click the Realm button in the top-right bar to cycle through all 6 3D realms live, or open **Lobby** to switch realms, hot-swap **3D Piece Sculpt** packs (`Realm Default`, `Sovereign`, `Crusader`, `Samurai`, `Pharaoh`, `Astral`), change AI difficulty (`Novice`, `Adept`, `Grandmaster`), flip sides (`White`/`Black`), pick Music Score (`Auto`, `Realm Score`, `Video OST`), enter SAN/coordinate moves directly, load tactical presets, or undo moves.

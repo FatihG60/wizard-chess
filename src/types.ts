@@ -7,7 +7,8 @@ export type GameMode = 'ai' | 'pass-and-play';
 export type AIDifficulty = 'novice' | 'adept' | 'grandmaster';
 export type CameraPreset = 'player' | 'top-down';
 export type ThemeId = 'gothic' | 'samurai' | 'pharaoh' | 'frost' | 'infernal' | 'astral';
-export type PieceModelSet = 'crusader' | 'samurai' | 'pharaoh' | 'astral';
+export type PieceModelSet = 'sovereign' | 'crusader' | 'samurai' | 'pharaoh' | 'astral';
+export type PieceStylePreference = 'theme-default' | PieceModelSet;
 export type MusicSourceMode = 'auto' | 'theme-synth' | 'video-ost';
 
 export const SQUARE_SIZE = 1.0;
@@ -106,6 +107,7 @@ export interface GameSettings {
   battleCam: boolean;
   soundEnabled: boolean;
   theme: ThemeId;
+  pieceStyle: PieceStylePreference;
   musicEnabled: boolean;
   musicSource: MusicSourceMode;
 }

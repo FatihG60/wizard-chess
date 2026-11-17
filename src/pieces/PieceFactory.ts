@@ -1,7 +1,14 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { THEMES } from '../themes';
-import type { ArticulatedPiece, PieceColor, PieceModelSet, PieceType, ThemeId } from '../types';
+import type {
+  ArticulatedPiece,
+  PieceColor,
+  PieceModelSet,
+  PieceStylePreference,
+  PieceType,
+  ThemeId,
+} from '../types';
 
 interface BakedMeshPart {
   geometry: THREE.BufferGeometry;
@@ -79,6 +86,11 @@ function saveRestPose(obj: THREE.Object3D): void {
 }
 
 const MODEL_URLS: Record<PieceModelSet, { w: string; b: string; label: string }> = {
+  sovereign: {
+    w: '/models/sovereign_white.glb',
+    b: '/models/sovereign_black.glb',
+    label: 'Sovereign Reliquary',
+  },
   crusader: {
     w: '/models/wizard_white.glb',
     b: '/models/wizard_black.glb',
@@ -114,6 +126,7 @@ export class PieceFactory {
     PieceModelSet,
     Record<PieceColor, Partial<Record<PieceType, BakedPieceRig>>>
   > = {
+    sovereign: createEmptySetRecord(),
     crusader: createEmptySetRecord(),
     samurai: createEmptySetRecord(),
     pharaoh: createEmptySetRecord(),
@@ -126,6 +139,7 @@ export class PieceFactory {
   private readonly loadedMaterials = new Set<THREE.Material>();
   private readonly loadedTextures = new Set<THREE.Texture>();
   private activeTheme: ThemeId = 'gothic';
+  private pieceStyle: PieceStylePreference = 'theme-default';
 
   constructor() {
     this.stoneGrainTex = createMicroGrainTexture(128, false);
@@ -232,8 +246,20 @@ export class PieceFactory {
     return this.activeTheme;
   }
 
+  public setPieceStyle(style: PieceStylePreference): void {
+    this.pieceStyle = style;
+  }
+
+  public getPieceStyle(): PieceStylePreference {
+    return this.pieceStyle;
+  }
+
+  public resolveModelSet(themeId: ThemeId = this.activeTheme): PieceModelSet {
+    return this.pieceStyle === 'theme-default' ? THEMES[themeId].modelSet : this.pieceStyle;
+  }
+
   public isUsingBlenderModels(themeId: ThemeId = this.activeTheme): boolean {
-    const modelSet = THEMES[themeId].modelSet;
+    const modelSet = this.resolveModelSet(themeId);
     return this.setLoadedReady.get(modelSet) === true;
   }
 
@@ -246,7 +272,7 @@ export class PieceFactory {
     onProgress?: (percent: number, label: string) => void,
   ): Promise<boolean> {
     this.activeTheme = themeId;
-    const modelSet = THEMES[themeId].modelSet;
+    const modelSet = this.resolveModelSet(themeId);
 
     if (this.setLoadedReady.get(modelSet)) {
       onProgress?.(100, `Blender 5.3 ${MODEL_URLS[modelSet].label} Ready`);
@@ -454,6 +480,19 @@ export class PieceFactory {
           cloned.emissive.setHex(color === 'w' ? pieceCfg.steelWhiteHex : pieceCfg.steelBlackHex);
           cloned.emissiveIntensity = (pieceCfg.emissiveIntensity ?? 0.18) * 0.85;
         }
+      } else if (mName.includes('gem')) {
+        cloned.map = null;
+        const gemHex = color === 'w' ? pieceCfg.steelWhiteHex : pieceCfg.steelBlackHex;
+        cloned.color.setHex(gemHex);
+        if ('emissive' in cloned && cloned.emissive) {
+          cloned.emissive.setHex(gemHex);
+          cloned.emissiveIntensity = 1.9;
+        }
+      } else if (mName.includes('velvet')) {
+        cloned.map = null;
+        cloned.color.setHex(
+          color === 'w' ? pieceCfg.whiteSecondaryHex : pieceCfg.blackSecondaryHex,
+        );
       }
 
       cloned.needsUpdate = true;
@@ -518,7 +557,7 @@ export class PieceFactory {
     color: PieceColor,
     themeId: ThemeId = this.activeTheme,
   ): ArticulatedPiece {
-    const modelSet = THEMES[themeId].modelSet;
+    const modelSet = this.resolveModelSet(themeId);
     const ready = this.setLoadedReady.get(modelSet) === true;
     const baked = ready ? this.rigsBySet[modelSet][color][type] : undefined;
     const pal = this.palettes[color];
