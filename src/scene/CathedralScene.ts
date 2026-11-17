@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { THEMES, type ParticleMode, type ThemeConfig } from '../themes';
 import {
   CameraPreset,
   PieceColor,
   SQUARE_SIZE,
   Square,
+  ThemeId,
   isLightSquare,
   squareToWorld,
 } from '../types';
@@ -38,10 +40,24 @@ interface BrazierEffect {
 
 interface DustMoteData {
   points: THREE.Points;
+  material: THREE.PointsMaterial;
+  mode: ParticleMode;
   basePositions: Float32Array;
   phases: Float32Array;
   speeds: Float32Array;
   count: number;
+}
+
+interface ThemeTextureBundle {
+  lightMap: THREE.CanvasTexture;
+  darkMap: THREE.CanvasTexture;
+  borderMap: THREE.CanvasTexture;
+  borderRough: THREE.CanvasTexture;
+  borderBump: THREE.CanvasTexture;
+  borderEmissive: THREE.CanvasTexture;
+  glassMap: THREE.CanvasTexture;
+  wallMap: THREE.CanvasTexture;
+  floorMap: THREE.CanvasTexture;
 }
 
 function createSeededRandom(seed: number): () => number {
@@ -140,6 +156,42 @@ export class CathedralScene {
   private readonly braziers: BrazierEffect[] = [];
   private dustMotes: DustMoteData | null = null;
   private readonly moonlightBeams: THREE.Mesh[] = [];
+
+  private currentTheme: ThemeId = 'gothic';
+  private readonly themeTextureCache = new Map<ThemeId, ThemeTextureBundle>();
+
+  private hemiLight!: THREE.HemisphereLight;
+  private keyLight!: THREE.DirectionalLight;
+  private moonRimLight!: THREE.DirectionalLight;
+  private zenithLight!: THREE.DirectionalLight;
+
+  private lightSquareMat!: THREE.MeshStandardMaterial;
+  private darkSquareMat!: THREE.MeshStandardMaterial;
+  private mortarMat!: THREE.MeshStandardMaterial;
+  private goldBezelMat!: THREE.MeshStandardMaterial;
+  private obsidianTopMat!: THREE.MeshStandardMaterial;
+  private obsidianSideMat!: THREE.MeshStandardMaterial;
+  private daisMat!: THREE.MeshStandardMaterial;
+  private floorMat!: THREE.MeshStandardMaterial;
+  private columnStoneMat!: THREE.MeshStandardMaterial;
+  private columnTrimMat!: THREE.MeshStandardMaterial;
+  private roofMat!: THREE.MeshStandardMaterial;
+  private wallMat!: THREE.MeshStandardMaterial;
+  private wallTrimMat!: THREE.MeshStandardMaterial;
+  private nicheMat!: THREE.MeshStandardMaterial;
+  private stainedGlassMat!: THREE.MeshStandardMaterial;
+  private beamMat!: THREE.MeshBasicMaterial;
+  private doorWoodMat!: THREE.MeshStandardMaterial;
+  private doorIronMat!: THREE.MeshStandardMaterial;
+  private doorBrassMat!: THREE.MeshStandardMaterial;
+  private brazierPedestalMat!: THREE.MeshStandardMaterial;
+  private brazierIronMat!: THREE.MeshStandardMaterial;
+  private brazierRimMat!: THREE.MeshStandardMaterial;
+  private readonly brazierEmberMats: THREE.MeshStandardMaterial[] = [];
+  private readonly brazierOuterFlameMats: THREE.MeshBasicMaterial[] = [];
+  private readonly brazierMidFlameMats: THREE.MeshBasicMaterial[] = [];
+  private readonly brazierInnerFlameMats: THREE.MeshBasicMaterial[] = [];
+  private readonly brazierParticleMats: THREE.PointsMaterial[] = [];
 
   private transition: CameraTransition | null = null;
   private currentPreset: CameraPreset = 'player';
@@ -478,13 +530,109 @@ export class CathedralScene {
     // Animate flickering braziers & rising embers
     this.updateBraziers(clampedDt, elapsed);
 
-    // Animate floating cathedral dust motes
-    this.updateDustMotes(elapsed);
+    // Animate floating cathedral particles
+    this.updateDustMotes(clampedDt, elapsed);
 
-    // Subtle shimmer on moonlight beams
+    // Subtle shimmer on light beams
+    const beamBase = THEMES[this.currentTheme].environment.beamOpacity;
     for (let i = 0; i < this.moonlightBeams.length; i++) {
       const mat = this.moonlightBeams[i].material as THREE.MeshBasicMaterial;
-      mat.opacity = 0.048 + Math.sin(elapsed * 0.45 + i * 1.1) * 0.01;
+      mat.opacity = beamBase + Math.sin(elapsed * 0.45 + i * 1.1) * 0.01;
+    }
+  }
+
+  public setTheme(themeId: ThemeId): void {
+    if (this.disposed) return;
+    this.currentTheme = themeId;
+    const cfg = THEMES[themeId];
+    const env = cfg.environment;
+    const br = cfg.brazier;
+    const bd = cfg.board;
+
+    this.scene.background = new THREE.Color(env.bgHex);
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.color.setHex(env.fogHex);
+      this.scene.fog.density = env.fogDensity;
+    }
+    this.scene.environmentIntensity = env.envIntensity;
+
+    this.hemiLight.color.setHex(env.hemiSkyHex);
+    this.hemiLight.groundColor.setHex(env.hemiGroundHex);
+    this.hemiLight.intensity = env.hemiIntensity;
+
+    this.keyLight.color.setHex(env.keyHex);
+    this.keyLight.intensity = env.keyIntensity;
+
+    this.moonRimLight.color.setHex(env.rimHex);
+    this.moonRimLight.intensity = env.rimIntensity;
+
+    this.zenithLight.color.setHex(env.zenithHex);
+    this.zenithLight.intensity = env.zenithIntensity;
+
+    const tex = this.getOrBuildThemeTextures(cfg);
+
+    this.lightSquareMat.map = tex.lightMap;
+    this.lightSquareMat.needsUpdate = true;
+
+    this.darkSquareMat.map = tex.darkMap;
+    this.darkSquareMat.needsUpdate = true;
+
+    this.obsidianTopMat.map = tex.borderMap;
+    this.obsidianTopMat.roughnessMap = tex.borderRough;
+    this.obsidianTopMat.bumpMap = tex.borderBump;
+    this.obsidianTopMat.emissiveMap = tex.borderEmissive;
+    this.obsidianTopMat.emissive.setHex(bd.runeEmissiveHex);
+    this.obsidianTopMat.emissiveIntensity = bd.runeEmissiveIntensity;
+    this.obsidianTopMat.needsUpdate = true;
+
+    this.obsidianSideMat.color.setHex(new THREE.Color(bd.borderBaseHex).getHex());
+    this.goldBezelMat.color.setHex(bd.bezelHex);
+    this.mortarMat.color.setHex(bd.mortarHex);
+    this.daisMat.color.setHex(bd.daisHex);
+
+    this.floorMat.map = tex.floorMap;
+    this.floorMat.needsUpdate = true;
+
+    this.wallMat.map = tex.wallMap;
+    this.wallMat.needsUpdate = true;
+
+    this.wallTrimMat.color.setHex(env.wallTrimHex);
+    this.nicheMat.color.setHex(env.nicheHex);
+    this.columnStoneMat.color.setHex(env.columnHex);
+    this.columnTrimMat.color.setHex(env.columnTrimHex);
+    this.roofMat.color.setHex(env.roofHex);
+
+    this.stainedGlassMat.map = tex.glassMap;
+    this.stainedGlassMat.emissiveMap = tex.glassMap;
+    this.stainedGlassMat.emissive.setHex(env.windowEmissiveHex);
+    this.stainedGlassMat.needsUpdate = true;
+
+    this.beamMat.color.setHex(env.beamHex);
+    this.beamMat.opacity = env.beamOpacity;
+
+    this.doorWoodMat.color.setHex(env.doorWoodHex);
+    this.doorIronMat.color.setHex(env.doorIronHex);
+    this.doorBrassMat.color.setHex(bd.bezelHex);
+
+    this.brazierPedestalMat.color.setHex(br.pedestalHex);
+    this.brazierIronMat.color.setHex(br.ironHex);
+    this.brazierRimMat.color.setHex(bd.bezelHex);
+
+    for (const b of this.braziers) {
+      b.light.color.setHex(br.lightHex);
+      b.baseIntensity = br.lightIntensity;
+    }
+    for (const m of this.brazierEmberMats) m.emissive.setHex(br.emberEmissiveHex);
+    for (const m of this.brazierOuterFlameMats) m.color.setHex(br.outerFlameHex);
+    for (const m of this.brazierMidFlameMats) m.color.setHex(br.midFlameHex);
+    for (const m of this.brazierInnerFlameMats) m.color.setHex(br.innerFlameHex);
+    for (const m of this.brazierParticleMats) m.color.setHex(br.sparkHex);
+
+    if (this.dustMotes) {
+      this.dustMotes.mode = cfg.particles.mode;
+      this.dustMotes.material.color.setHex(cfg.particles.colorHex);
+      this.dustMotes.material.size = cfg.particles.size;
+      this.dustMotes.material.opacity = cfg.particles.opacity;
     }
   }
 
@@ -542,33 +690,33 @@ export class CathedralScene {
   // ---------------------------------------------------------------------------
 
   private setupLighting(): void {
-    const hemi = this.trackLight(new THREE.HemisphereLight(0x7392c4, 0x2a1f16, 0.58));
-    this.scene.add(hemi);
+    this.hemiLight = this.trackLight(new THREE.HemisphereLight(0x7392c4, 0x2a1f16, 0.58));
+    this.scene.add(this.hemiLight);
 
     // Warm key directional light from high sanctum shaft
-    const keyLight = this.trackLight(new THREE.DirectionalLight(0xffe9ca, 2.15));
-    keyLight.position.set(-6.0, 14.5, 7.0);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(2048, 2048);
-    keyLight.shadow.camera.near = 2;
-    keyLight.shadow.camera.far = 36;
-    keyLight.shadow.camera.left = -7.5;
-    keyLight.shadow.camera.right = 7.5;
-    keyLight.shadow.camera.top = 7.5;
-    keyLight.shadow.camera.bottom = -7.5;
-    keyLight.shadow.bias = -0.0003;
-    keyLight.shadow.normalBias = 0.024;
-    this.scene.add(keyLight);
+    this.keyLight = this.trackLight(new THREE.DirectionalLight(0xffe9ca, 2.15));
+    this.keyLight.position.set(-6.0, 14.5, 7.0);
+    this.keyLight.castShadow = true;
+    this.keyLight.shadow.mapSize.set(2048, 2048);
+    this.keyLight.shadow.camera.near = 2;
+    this.keyLight.shadow.camera.far = 36;
+    this.keyLight.shadow.camera.left = -7.5;
+    this.keyLight.shadow.camera.right = 7.5;
+    this.keyLight.shadow.camera.top = 7.5;
+    this.keyLight.shadow.camera.bottom = -7.5;
+    this.keyLight.shadow.bias = -0.0003;
+    this.keyLight.shadow.normalBias = 0.024;
+    this.scene.add(this.keyLight);
 
     // Cool blue moonlight rim from lancet stained-glass windows
-    const moonRim = this.trackLight(new THREE.DirectionalLight(0x6c9ef0, 0.95));
-    moonRim.position.set(4.5, 10.5, -12.0);
-    this.scene.add(moonRim);
+    this.moonRimLight = this.trackLight(new THREE.DirectionalLight(0x6c9ef0, 0.95));
+    this.moonRimLight.position.set(4.5, 10.5, -12.0);
+    this.scene.add(this.moonRimLight);
 
     // Subtle overhead sanctum fill so tops of crowns and faces read sharply
-    const zenithFill = this.trackLight(new THREE.DirectionalLight(0xcfdcff, 0.35));
-    zenithFill.position.set(0, 14, -2);
-    this.scene.add(zenithFill);
+    this.zenithLight = this.trackLight(new THREE.DirectionalLight(0xcfdcff, 0.35));
+    this.zenithLight.position.set(0, 14, -2);
+    this.scene.add(this.zenithLight);
   }
 
   // ---------------------------------------------------------------------------
@@ -583,7 +731,7 @@ export class CathedralScene {
     const lightMarble = this.createMarbleSquareTextures(true);
     const darkMarble = this.createMarbleSquareTextures(false);
 
-    const lightMat = this.trackMaterial(
+    this.lightSquareMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         map: lightMarble.map,
         roughnessMap: lightMarble.roughnessMap,
@@ -593,8 +741,9 @@ export class CathedralScene {
         metalness: 0.04,
       })
     );
+    const lightMat = this.lightSquareMat;
 
-    const darkMat = this.trackMaterial(
+    this.darkSquareMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         map: darkMarble.map,
         roughnessMap: darkMarble.roughnessMap,
@@ -604,6 +753,7 @@ export class CathedralScene {
         metalness: 0.08,
       })
     );
+    const darkMat = this.darkSquareMat;
 
     // Base beveled square tile geometry with top strictly at y = 0
     const baseTileGeo = this.createBeveledTileGeometry(0.968, 0.14, 0.014);
@@ -635,26 +785,27 @@ export class CathedralScene {
 
     // Dark bronze-obsidian mortar bed right under the 64 squares so tile bevel seams read sharply
     const mortarBedGeo = this.trackGeometry(new THREE.BoxGeometry(8.04, 0.14, 8.04));
-    const mortarMat = this.trackMaterial(
+    this.mortarMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x161412,
         roughness: 0.5,
         metalness: 0.35,
       })
     );
-    const mortarBed = new THREE.Mesh(mortarBedGeo, mortarMat);
+    const mortarBed = new THREE.Mesh(mortarBedGeo, this.mortarMat);
     mortarBed.position.set(0, -0.088, 0);
     mortarBed.receiveShadow = true;
     boardGroup.add(mortarBed);
 
     // Raised brushed-gold inner bezel framing the 8x8 grid
-    const goldMat = this.trackMaterial(
+    this.goldBezelMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0xd4af37,
         metalness: 0.88,
         roughness: 0.22,
       })
     );
+    const goldMat = this.goldBezelMat;
 
     const bezelInner = 4.01 * SQUARE_SIZE;
     const bezelOuter = 4.22 * SQUARE_SIZE;
@@ -711,7 +862,7 @@ export class CathedralScene {
 
     // Wide cracked black obsidian outer border (~10.6 x 10.6) with 2K procedural rune textures
     const obsidianTextures = this.createObsidianRuneBorderTextures();
-    const obsidianTopMat = this.trackMaterial(
+    this.obsidianTopMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         map: obsidianTextures.map,
         roughnessMap: obsidianTextures.roughnessMap,
@@ -724,13 +875,15 @@ export class CathedralScene {
         metalness: 0.18,
       })
     );
-    const obsidianSideMat = this.trackMaterial(
+    const obsidianTopMat = this.obsidianTopMat;
+    this.obsidianSideMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x0e1016,
         roughness: 0.34,
         metalness: 0.22,
       })
     );
+    const obsidianSideMat = this.obsidianSideMat;
 
     const obsidianGeo = this.trackGeometry(new THREE.BoxGeometry(10.6, 0.42, 10.6));
     const obsidianBorder = new THREE.Mesh(obsidianGeo, [
@@ -754,13 +907,14 @@ export class CathedralScene {
     boardGroup.add(outerBrassRim);
 
     // Stepped dark basalt dais anchoring the chessboard to the cathedral floor (y = -0.65)
-    const daisMat = this.trackMaterial(
+    this.daisMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x1a1d24,
         roughness: 0.68,
         metalness: 0.08,
       })
     );
+    const daisMat = this.daisMat;
     const daisUpperGeo = this.trackGeometry(new THREE.BoxGeometry(11.1, 0.11, 11.1));
     const daisUpper = new THREE.Mesh(daisUpperGeo, daisMat);
     daisUpper.position.set(0, -0.515, 0);
@@ -1406,7 +1560,7 @@ export class CathedralScene {
 
   private buildCathedralFloor(): void {
     const floorTex = this.createStoneTileTextures();
-    const floorMat = this.trackMaterial(
+    this.floorMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         map: floorTex.map,
         bumpMap: floorTex.bumpMap,
@@ -1416,6 +1570,7 @@ export class CathedralScene {
         metalness: 0.06,
       })
     );
+    const floorMat = this.floorMat;
 
     const floorGeo = this.trackGeometry(new THREE.PlaneGeometry(46, 58));
     floorGeo.rotateX(-Math.PI / 2);
@@ -1426,20 +1581,22 @@ export class CathedralScene {
   }
 
   private buildCathedralColumnsAndVaults(): void {
-    const stoneMat = this.trackMaterial(
+    this.columnStoneMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x262b36,
         roughness: 0.76,
         metalness: 0.06,
       })
     );
-    const darkTrimStoneMat = this.trackMaterial(
+    const stoneMat = this.columnStoneMat;
+    this.columnTrimMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x1b1f28,
         roughness: 0.65,
         metalness: 0.1,
       })
     );
+    const darkTrimStoneMat = this.columnTrimMat;
 
     // Shared column geometries (tall enough that top-down camera at portrait aspect never clips arches)
     const base1Geo = this.trackGeometry(new THREE.CylinderGeometry(0.95, 1.02, 0.34, 8));
@@ -1520,20 +1677,20 @@ export class CathedralScene {
     // Dark vaulted roof cap high above
     const roofGeo = this.trackGeometry(new THREE.PlaneGeometry(34, 54));
     roofGeo.rotateX(Math.PI / 2);
-    const roofMat = this.trackMaterial(
+    this.roofMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x0c0f16,
         roughness: 0.92,
       })
     );
-    const roof = new THREE.Mesh(roofGeo, roofMat);
+    const roof = new THREE.Mesh(roofGeo, this.roofMat);
     roof.position.y = 30.6;
     this.scene.add(roof);
   }
 
   private buildCathedralWallsAndWindows(): void {
     const masonry = this.createWallMasonryTextures();
-    const wallMat = this.trackMaterial(
+    this.wallMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         map: masonry.map,
         bumpMap: masonry.bumpMap,
@@ -1542,19 +1699,22 @@ export class CathedralScene {
         metalness: 0.04,
       })
     );
-    const trimMat = this.trackMaterial(
+    const wallMat = this.wallMat;
+    this.wallTrimMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x222632,
         roughness: 0.72,
         metalness: 0.08,
       })
     );
-    const nicheMat = this.trackMaterial(
+    const trimMat = this.wallTrimMat;
+    this.nicheMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x12151c,
         roughness: 0.88,
       })
     );
+    const nicheMat = this.nicheMat;
 
     // Main outer perimeter walls (end walls at z = +/-24.8 so narrow-aspect cameras never clip outside)
     const nsWallGeo = this.trackGeometry(new THREE.BoxGeometry(30, 31.8, 0.6));
@@ -1619,7 +1779,7 @@ export class CathedralScene {
 
     // Tall mullioned lancet stained-glass windows + cool blue moonlight beams
     const stainedGlassTex = this.createStainedGlassTexture();
-    const glassMat = this.trackMaterial(
+    this.stainedGlassMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         map: stainedGlassTex,
         emissiveMap: stainedGlassTex,
@@ -1629,6 +1789,7 @@ export class CathedralScene {
         metalness: 0.1,
       })
     );
+    const glassMat = this.stainedGlassMat;
     const lancetFrameGeo = this.createPointedArchFrameGeometry(2.3, 6.8, 0.24, 0.32);
     const glassPaneGeo = this.trackGeometry(new THREE.PlaneGeometry(2.05, 6.1));
     const mullionGeo = this.trackGeometry(new THREE.BoxGeometry(0.11, 5.8, 0.18));
@@ -1636,7 +1797,7 @@ export class CathedralScene {
     const oculusGeo = this.trackGeometry(new THREE.TorusGeometry(0.32, 0.055, 8, 18));
 
     const beamTex = this.createMoonlightBeamTexture();
-    const beamMat = this.trackMaterial(
+    this.beamMat = this.trackMaterial(
       new THREE.MeshBasicMaterial({
         map: beamTex,
         color: 0x7cb6ff,
@@ -1647,6 +1808,7 @@ export class CathedralScene {
         side: THREE.DoubleSide,
       })
     );
+    const beamMat = this.beamMat;
     const beamGeo = this.trackGeometry(new THREE.PlaneGeometry(2.5, 13.0));
 
     const placeLancetWindow = (x: number, y: number, z: number, rotY: number, withBeam: boolean) => {
@@ -1746,34 +1908,37 @@ export class CathedralScene {
     group.position.set(x, -0.65, z);
     group.rotation.y = rotY;
 
-    const stoneMat = this.trackMaterial(
-      new THREE.MeshStandardMaterial({
-        color: 0x252935,
-        roughness: 0.72,
-        metalness: 0.08,
-      })
-    );
-    const oakMat = this.trackMaterial(
-      new THREE.MeshStandardMaterial({
-        color: 0x2a1b12,
-        roughness: 0.78,
-        metalness: 0.06,
-      })
-    );
-    const ironMat = this.trackMaterial(
-      new THREE.MeshStandardMaterial({
-        color: 0x1a1d24,
-        roughness: 0.36,
-        metalness: 0.85,
-      })
-    );
-    const brassMat = this.trackMaterial(
-      new THREE.MeshStandardMaterial({
-        color: 0xc29b38,
-        roughness: 0.3,
-        metalness: 0.88,
-      })
-    );
+    const stoneMat = this.columnStoneMat;
+    if (!this.doorWoodMat) {
+      this.doorWoodMat = this.trackMaterial(
+        new THREE.MeshStandardMaterial({
+          color: 0x2a1b12,
+          roughness: 0.78,
+          metalness: 0.06,
+        })
+      );
+    }
+    const oakMat = this.doorWoodMat;
+    if (!this.doorIronMat) {
+      this.doorIronMat = this.trackMaterial(
+        new THREE.MeshStandardMaterial({
+          color: 0x1a1d24,
+          roughness: 0.36,
+          metalness: 0.85,
+        })
+      );
+    }
+    const ironMat = this.doorIronMat;
+    if (!this.doorBrassMat) {
+      this.doorBrassMat = this.trackMaterial(
+        new THREE.MeshStandardMaterial({
+          color: 0xc29b38,
+          roughness: 0.3,
+          metalness: 0.88,
+        })
+      );
+    }
+    const brassMat = this.doorBrassMat;
 
     const portalFrameGeo = this.createPointedArchFrameGeometry(3.8, 6.2, 0.48, 0.45);
     const portal = new THREE.Mesh(portalFrameGeo, stoneMat);
@@ -1915,27 +2080,30 @@ export class CathedralScene {
   }
 
   private buildBraziers(): void {
-    const stonePedestalMat = this.trackMaterial(
+    this.brazierPedestalMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x1e222b,
         roughness: 0.72,
         metalness: 0.08,
       })
     );
-    const ironMat = this.trackMaterial(
+    const stonePedestalMat = this.brazierPedestalMat;
+    this.brazierIronMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0x171920,
         roughness: 0.36,
         metalness: 0.86,
       })
     );
-    const goldAccentMat = this.trackMaterial(
+    const ironMat = this.brazierIronMat;
+    this.brazierRimMat = this.trackMaterial(
       new THREE.MeshStandardMaterial({
         color: 0xb89334,
         roughness: 0.3,
         metalness: 0.88,
       })
     );
+    const goldAccentMat = this.brazierRimMat;
 
     const spriteTex = this.createGlowSpriteTexture();
 
@@ -2004,6 +2172,7 @@ export class CathedralScene {
           roughness: 0.7,
         })
       );
+      this.brazierEmberMats.push(emberMat);
       const emberCore = new THREE.Mesh(emberGeo, emberMat);
       emberCore.scale.set(1.15, 0.52, 1.15);
       emberCore.position.y = 1.38;
@@ -2037,6 +2206,9 @@ export class CathedralScene {
           depthWrite: false,
         })
       );
+      this.brazierOuterFlameMats.push(outerMat);
+      this.brazierMidFlameMats.push(midMat);
+      this.brazierInnerFlameMats.push(innerMat);
 
       const outerFlame = new THREE.Mesh(flameConeGeo, outerMat);
       outerFlame.position.y = 1.72;
@@ -2078,6 +2250,7 @@ export class CathedralScene {
           depthWrite: false,
         })
       );
+      this.brazierParticleMats.push(pMat);
       const particles = new THREE.Points(pGeo, pMat);
       this.scene.add(particles);
 
@@ -2230,22 +2403,404 @@ export class CathedralScene {
 
     const points = new THREE.Points(geo, mat);
     this.scene.add(points);
-    this.dustMotes = { points, basePositions, phases, speeds, count };
+    this.dustMotes = {
+      points,
+      material: mat,
+      mode: 'dust',
+      basePositions,
+      phases,
+      speeds,
+      count,
+    };
   }
 
-  private updateDustMotes(elapsed: number): void {
+  private updateDustMotes(dt: number, elapsed: number): void {
     if (!this.dustMotes) return;
-    const { points, basePositions, phases, speeds, count } = this.dustMotes;
+    const { points, mode, basePositions, phases, speeds, count } = this.dustMotes;
     const posAttr = points.geometry.getAttribute('position') as THREE.BufferAttribute;
     const arr = posAttr.array as Float32Array;
 
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
       const t = elapsed * speeds[i] + phases[i];
-      arr[i3] = basePositions[i3] + Math.sin(t) * 0.24;
-      arr[i3 + 1] = basePositions[i3 + 1] + Math.cos(t * 0.7) * 0.18;
-      arr[i3 + 2] = basePositions[i3 + 2] + Math.sin(t * 0.85 + 1.2) * 0.24;
+
+      if (mode === 'sakura' || mode === 'snow') {
+        const fallSpeed = mode === 'sakura' ? 0.72 : 0.56;
+        basePositions[i3 + 1] -= fallSpeed * (0.65 + speeds[i] * 0.45) * dt;
+        if (basePositions[i3 + 1] < -0.5) {
+          basePositions[i3 + 1] = 9.2;
+        }
+        const swayAmp = mode === 'sakura' ? 0.65 : 0.35;
+        arr[i3] = basePositions[i3] + Math.sin(t * 1.4) * swayAmp;
+        arr[i3 + 1] = basePositions[i3 + 1];
+        arr[i3 + 2] = basePositions[i3 + 2] + Math.cos(t * 1.1 + 0.8) * swayAmp;
+      } else if (mode === 'embers') {
+        basePositions[i3 + 1] += 1.05 * (0.6 + speeds[i] * 0.6) * dt;
+        if (basePositions[i3 + 1] > 9.2) {
+          basePositions[i3 + 1] = -0.5;
+        }
+        arr[i3] = basePositions[i3] + Math.sin(t * 2.2) * 0.42;
+        arr[i3 + 1] = basePositions[i3 + 1];
+        arr[i3 + 2] = basePositions[i3 + 2] + Math.cos(t * 2.0 + 1.1) * 0.42;
+      } else {
+        arr[i3] = basePositions[i3] + Math.sin(t) * 0.24;
+        arr[i3 + 1] = basePositions[i3 + 1] + Math.cos(t * 0.7) * 0.18;
+        arr[i3 + 2] = basePositions[i3 + 2] + Math.sin(t * 0.85 + 1.2) * 0.24;
+      }
     }
     posAttr.needsUpdate = true;
+  }
+
+  private getOrBuildThemeTextures(cfg: ThemeConfig): ThemeTextureBundle {
+    const cached = this.themeTextureCache.get(cfg.id);
+    if (cached) return cached;
+
+    if (cfg.id === 'gothic') {
+      const bundle: ThemeTextureBundle = {
+        lightMap: this.lightSquareMat.map as THREE.CanvasTexture,
+        darkMap: this.darkSquareMat.map as THREE.CanvasTexture,
+        borderMap: this.obsidianTopMat.map as THREE.CanvasTexture,
+        borderRough: this.obsidianTopMat.roughnessMap as THREE.CanvasTexture,
+        borderBump: this.obsidianTopMat.bumpMap as THREE.CanvasTexture,
+        borderEmissive: this.obsidianTopMat.emissiveMap as THREE.CanvasTexture,
+        glassMap: this.stainedGlassMat.map as THREE.CanvasTexture,
+        wallMap: this.wallMat.map as THREE.CanvasTexture,
+        floorMap: this.floorMat.map as THREE.CanvasTexture,
+      };
+      this.themeTextureCache.set('gothic', bundle);
+      return bundle;
+    }
+
+    const lightSq = this.createThemedSquareTexture(true, cfg);
+    const darkSq = this.createThemedSquareTexture(false, cfg);
+    const border = this.createThemedBorderTextures(cfg);
+    const glassMap = this.createThemedWindowTexture(cfg);
+    const wallMap = this.createThemedWallTexture(cfg);
+    const floorMap = this.createThemedFloorTexture(cfg);
+
+    const bundle: ThemeTextureBundle = {
+      lightMap: lightSq,
+      darkMap: darkSq,
+      borderMap: border.map,
+      borderRough: border.roughnessMap,
+      borderBump: border.bumpMap,
+      borderEmissive: border.emissiveMap,
+      glassMap,
+      wallMap,
+      floorMap,
+    };
+    this.themeTextureCache.set(cfg.id, bundle);
+    return bundle;
+  }
+
+  private createThemedSquareTexture(isLight: boolean, cfg: ThemeConfig): THREE.CanvasTexture {
+    const size = 512;
+    const rand = createSeededRandom(
+      (isLight ? 4109 : 9203) + cfg.id.charCodeAt(0) * 131 + cfg.id.charCodeAt(1) * 17,
+    );
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+
+    ctx.fillStyle = isLight ? cfg.board.lightSquareHex : cfg.board.darkSquareHex;
+    ctx.fillRect(0, 0, size, size);
+
+    const veinColor = isLight ? cfg.board.lightVeinHex : cfg.board.darkVeinHex;
+    for (let v = 0; v < 18; v++) {
+      let x = rand() * size;
+      let y = rand() * size;
+      let angle = rand() * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      for (let s = 0; s < 26; s++) {
+        angle += (rand() - 0.5) * 0.72;
+        x += Math.cos(angle) * (8 + rand() * 12);
+        y += Math.sin(angle) * (8 + rand() * 12);
+        ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = veinColor;
+      ctx.lineWidth = 0.8 + rand() * 2.4;
+      ctx.stroke();
+    }
+
+    const tex = this.trackTexture(new THREE.CanvasTexture(canvas));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = this.maxAnisotropy();
+    return tex;
+  }
+
+  private createThemedBorderTextures(cfg: ThemeConfig): {
+    map: THREE.CanvasTexture;
+    roughnessMap: THREE.CanvasTexture;
+    bumpMap: THREE.CanvasTexture;
+    emissiveMap: THREE.CanvasTexture;
+  } {
+    const size = 1024;
+    const rand = createSeededRandom(7731 + cfg.id.charCodeAt(0) * 97);
+
+    const diffCanvas = document.createElement('canvas');
+    diffCanvas.width = size;
+    diffCanvas.height = size;
+    const dCtx = diffCanvas.getContext('2d')!;
+
+    const roughCanvas = document.createElement('canvas');
+    roughCanvas.width = size;
+    roughCanvas.height = size;
+    const rCtx = roughCanvas.getContext('2d')!;
+
+    const bumpCanvas = document.createElement('canvas');
+    bumpCanvas.width = size;
+    bumpCanvas.height = size;
+    const bCtx = bumpCanvas.getContext('2d')!;
+
+    const emisCanvas = document.createElement('canvas');
+    emisCanvas.width = size;
+    emisCanvas.height = size;
+    const eCtx = emisCanvas.getContext('2d')!;
+
+    dCtx.fillStyle = cfg.board.borderBaseHex;
+    dCtx.fillRect(0, 0, size, size);
+    rCtx.fillStyle = '#383838';
+    rCtx.fillRect(0, 0, size, size);
+    bCtx.fillStyle = '#808080';
+    bCtx.fillRect(0, 0, size, size);
+    eCtx.fillStyle = '#000000';
+    eCtx.fillRect(0, 0, size, size);
+
+    // Theme veins along margins
+    for (let i = 0; i < 32; i++) {
+      let x = rand() * size;
+      let y = rand() * size;
+      let ang = rand() * Math.PI * 2;
+      dCtx.beginPath();
+      dCtx.moveTo(x, y);
+      for (let s = 0; s < 10; s++) {
+        ang += (rand() - 0.5) * 0.8;
+        x += Math.cos(ang) * 26;
+        y += Math.sin(ang) * 26;
+        dCtx.lineTo(x, y);
+      }
+      dCtx.strokeStyle = cfg.board.borderVeinHex;
+      dCtx.lineWidth = 1.2 + rand() * 1.4;
+      dCtx.stroke();
+    }
+
+    // Accent trim frames
+    for (const [inset, lw] of [
+      [14, 3],
+      [24, 1.8],
+      [98, 2.5],
+    ]) {
+      const w = size - inset * 2;
+      dCtx.strokeStyle = cfg.board.runeHex;
+      dCtx.lineWidth = lw;
+      dCtx.strokeRect(inset, inset, w, w);
+      eCtx.strokeStyle = cfg.board.runeHex;
+      eCtx.lineWidth = lw;
+      eCtx.strokeRect(inset, inset, w, w);
+    }
+
+    // Realm-specific glyphs along all 4 sides
+    const drawMotif = (idx: number, cx: number, cy: number, rad: number, rot: number) => {
+      const drawTo = (ctx: CanvasRenderingContext2D, color: string, lw: number) => {
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(rot);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lw;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        if (cfg.board.runeStyle === 'samurai') {
+          // Torii gate & diamond kamon alternating motifs
+          if (idx % 2 === 0) {
+            ctx.moveTo(-rad * 0.85, -rad * 0.55);
+            ctx.lineTo(rad * 0.85, -rad * 0.55);
+            ctx.moveTo(-rad * 0.6, -rad * 0.2);
+            ctx.lineTo(rad * 0.6, -rad * 0.2);
+            ctx.moveTo(-rad * 0.42, -rad * 0.55);
+            ctx.lineTo(-rad * 0.42, rad * 0.75);
+            ctx.moveTo(rad * 0.42, -rad * 0.55);
+            ctx.lineTo(rad * 0.42, rad * 0.75);
+          } else {
+            ctx.arc(0, 0, rad * 0.68, 0, Math.PI * 2);
+            ctx.moveTo(0, -rad * 0.48);
+            ctx.lineTo(rad * 0.48, 0);
+            ctx.lineTo(0, rad * 0.48);
+            ctx.lineTo(-rad * 0.48, 0);
+            ctx.closePath();
+          }
+        } else if (cfg.board.runeStyle === 'hieroglyph') {
+          // Ankh & Pyramid lotus motifs
+          if (idx % 2 === 0) {
+            ctx.arc(0, -rad * 0.42, rad * 0.28, 0, Math.PI * 2);
+            ctx.moveTo(0, -rad * 0.14);
+            ctx.lineTo(0, rad * 0.82);
+            ctx.moveTo(-rad * 0.55, rad * 0.15);
+            ctx.lineTo(rad * 0.55, rad * 0.15);
+          } else {
+            ctx.moveTo(0, -rad * 0.75);
+            ctx.lineTo(rad * 0.7, rad * 0.65);
+            ctx.lineTo(-rad * 0.7, rad * 0.65);
+            ctx.closePath();
+            ctx.moveTo(-rad * 0.35, 0);
+            ctx.lineTo(rad * 0.35, 0);
+          }
+        } else if (cfg.board.runeStyle === 'astral') {
+          // Constellation & astrolabe rings
+          ctx.arc(0, 0, rad * 0.52, 0, Math.PI * 2);
+          ctx.moveTo(0, -rad * 0.85);
+          ctx.lineTo(0, rad * 0.85);
+          ctx.moveTo(-rad * 0.85, 0);
+          ctx.lineTo(rad * 0.85, 0);
+        } else {
+          const strokes = ELDER_FUTHARK_STROKES[idx % ELDER_FUTHARK_STROKES.length];
+          for (const [x1, y1, x2, y2] of strokes) {
+            ctx.moveTo(x1 * rad, y1 * rad);
+            ctx.lineTo(x2 * rad, y2 * rad);
+          }
+        }
+        ctx.stroke();
+        ctx.restore();
+      };
+      drawTo(bCtx, '#383838', 5);
+      drawTo(dCtx, cfg.board.runeHex, 3.8);
+      drawTo(eCtx, cfg.board.runeHex, 3.6);
+    };
+
+    const spanStart = 120;
+    const spanEnd = size - 120;
+    for (let i = 0; i < 14; i++) {
+      const p = spanStart + (i / 13) * (spanEnd - spanStart);
+      drawMotif(i, p, 58, 19, Math.PI);
+      drawMotif(i + 5, p, size - 58, 19, 0);
+      drawMotif(i + 10, 58, p, 19, -Math.PI / 2);
+      drawMotif(i + 15, size - 58, p, 19, Math.PI / 2);
+    }
+
+    const map = this.trackTexture(new THREE.CanvasTexture(diffCanvas));
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.anisotropy = this.maxAnisotropy();
+
+    const roughnessMap = this.trackTexture(new THREE.CanvasTexture(roughCanvas));
+    const bumpMap = this.trackTexture(new THREE.CanvasTexture(bumpCanvas));
+    const emissiveMap = this.trackTexture(new THREE.CanvasTexture(emisCanvas));
+    emissiveMap.colorSpace = THREE.SRGBColorSpace;
+
+    return { map, roughnessMap, bumpMap, emissiveMap };
+  }
+
+  private createThemedWindowTexture(cfg: ThemeConfig): THREE.CanvasTexture {
+    const w = 256;
+    const h = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+
+    if (cfg.environment.windowStyle === 'shoji') {
+      grad.addColorStop(0, '#FFD4A3');
+      grad.addColorStop(0.55, '#E07A5F');
+      grad.addColorStop(1, '#5C1B1B');
+    } else if (cfg.environment.windowStyle === 'solar') {
+      grad.addColorStop(0, '#FFF1A8');
+      grad.addColorStop(0.5, '#F59E0B');
+      grad.addColorStop(1, '#78350F');
+    } else if (cfg.environment.windowStyle === 'aurora') {
+      grad.addColorStop(0, '#A5F3FC');
+      grad.addColorStop(0.5, '#0284C7');
+      grad.addColorStop(1, '#0C4A6E');
+    } else if (cfg.environment.windowStyle === 'magma') {
+      grad.addColorStop(0, '#FDBA74');
+      grad.addColorStop(0.45, '#DC2626');
+      grad.addColorStop(1, '#450A0A');
+    } else {
+      grad.addColorStop(0, '#E9D5FF');
+      grad.addColorStop(0.5, '#7E22CE');
+      grad.addColorStop(1, '#1E1B4B');
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = 'rgba(10, 10, 16, 0.85)';
+    ctx.lineWidth = 4;
+    const step = cfg.environment.windowStyle === 'shoji' ? 42 : 32;
+    for (let y = 0; y <= h; y += step) {
+      for (let x = 0; x <= w; x += step) {
+        ctx.strokeRect(x, y, step, step);
+      }
+    }
+
+    const tex = this.trackTexture(new THREE.CanvasTexture(canvas));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  private createThemedWallTexture(cfg: ThemeConfig): THREE.CanvasTexture {
+    const size = 512;
+    const rand = createSeededRandom(5507 + cfg.id.charCodeAt(0) * 61);
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = cfg.environment.wallBaseHex;
+    ctx.fillRect(0, 0, size, size);
+
+    const baseCol = new THREE.Color(cfg.environment.wallBaseHex);
+    const rows = 10;
+    const cols = 6;
+    const rowH = size / rows;
+    const colW = size / cols;
+    for (let r = 0; r < rows; r++) {
+      const off = (r % 2) * (colW * 0.5);
+      for (let c = -1; c <= cols; c++) {
+        const shade = 0.85 + rand() * 0.35;
+        const rc = Math.min(255, Math.round(baseCol.r * 255 * shade));
+        const gc = Math.min(255, Math.round(baseCol.g * 255 * shade));
+        const bc = Math.min(255, Math.round(baseCol.b * 255 * shade));
+        ctx.fillStyle = `rgb(${rc},${gc},${bc})`;
+        ctx.fillRect(c * colW + off + 2, r * rowH + 2, colW - 4, rowH - 4);
+      }
+    }
+    const tex = this.trackTexture(new THREE.CanvasTexture(canvas));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(3, 2);
+    return tex;
+  }
+
+  private createThemedFloorTexture(cfg: ThemeConfig): THREE.CanvasTexture {
+    const size = 512;
+    const rand = createSeededRandom(3181 + cfg.id.charCodeAt(0) * 43);
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = cfg.environment.floorBaseHex;
+    ctx.fillRect(0, 0, size, size);
+
+    const baseCol = new THREE.Color(cfg.environment.floorBaseHex);
+    const tile = size / 4;
+    for (let gx = 0; gx < 4; gx++) {
+      for (let gy = 0; gy < 4; gy++) {
+        const shade = 0.88 + rand() * 0.3;
+        const rc = Math.min(255, Math.round(baseCol.r * 255 * shade));
+        const gc = Math.min(255, Math.round(baseCol.g * 255 * shade));
+        const bc = Math.min(255, Math.round(baseCol.b * 255 * shade));
+        ctx.fillStyle = `rgb(${rc},${gc},${bc})`;
+        ctx.fillRect(gx * tile + 3, gy * tile + 3, tile - 6, tile - 6);
+      }
+    }
+    const tex = this.trackTexture(new THREE.CanvasTexture(canvas));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(9, 11);
+    tex.anisotropy = this.maxAnisotropy();
+    return tex;
   }
 }

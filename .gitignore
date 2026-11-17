@@ -20,3 +20,9 @@ npm-debug.log*
 Thumbs.db
 .vscode/*
 !.vscode/extensions.json
+
+# Python & Blender artifacts
+__pycache__/
+*.py[cod]
+*.blend1
+*.blend2

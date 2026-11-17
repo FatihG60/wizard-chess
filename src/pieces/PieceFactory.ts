@@ -1,5 +1,26 @@
 import * as THREE from 'three';
-import type { ArticulatedPiece, PieceColor, PieceType } from '../types';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { THEMES } from '../themes';
+import type { ArticulatedPiece, PieceColor, PieceModelSet, PieceType, ThemeId } from '../types';
+
+interface BakedMeshPart {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material | THREE.Material[];
+}
+
+interface BakedPieceRig {
+  bodyPos: THREE.Vector3;
+  headPos?: THREE.Vector3;
+  weaponPos: THREE.Vector3;
+  shieldPos?: THREE.Vector3;
+  plinthParts: BakedMeshPart[];
+  bodyParts: BakedMeshPart[];
+  headParts: BakedMeshPart[];
+  weaponParts: BakedMeshPart[];
+  shieldParts: BakedMeshPart[];
+}
+
+const PIECE_TYPES: ReadonlyArray<PieceType> = ['p', 'r', 'n', 'b', 'q', 'k'];
 
 interface ColorPalette {
   primary: THREE.MeshPhysicalMaterial;
@@ -57,11 +78,54 @@ function saveRestPose(obj: THREE.Object3D): void {
   obj.userData.restRot = obj.rotation.clone();
 }
 
+const MODEL_URLS: Record<PieceModelSet, { w: string; b: string; label: string }> = {
+  crusader: {
+    w: '/models/wizard_white.glb',
+    b: '/models/wizard_black.glb',
+    label: 'Crusader Order',
+  },
+  samurai: {
+    w: '/models/samurai_white.glb',
+    b: '/models/samurai_black.glb',
+    label: 'Shogunate Legion',
+  },
+  pharaoh: {
+    w: '/models/pharaoh_white.glb',
+    b: '/models/pharaoh_black.glb',
+    label: 'Solar Dynasty',
+  },
+  astral: {
+    w: '/models/astral_white.glb',
+    b: '/models/astral_black.glb',
+    label: 'Celestial Archons',
+  },
+};
+
+function createEmptySetRecord(): Record<PieceColor, Partial<Record<PieceType, BakedPieceRig>>> {
+  return { w: {}, b: {} };
+}
+
 export class PieceFactory {
   private readonly stoneGrainTex: THREE.DataTexture;
   private readonly brushedMetalTex: THREE.DataTexture;
   private readonly palettes: Record<PieceColor, ColorPalette>;
   private readonly geoCache = new Map<string, THREE.BufferGeometry>();
+  private readonly rigsBySet: Record<
+    PieceModelSet,
+    Record<PieceColor, Partial<Record<PieceType, BakedPieceRig>>>
+  > = {
+    crusader: createEmptySetRecord(),
+    samurai: createEmptySetRecord(),
+    pharaoh: createEmptySetRecord(),
+    astral: createEmptySetRecord(),
+  };
+  private readonly setLoadPromises = new Map<PieceModelSet, Promise<boolean>>();
+  private readonly setLoadedReady = new Map<PieceModelSet, boolean>();
+  private readonly themedMatCache = new Map<string, THREE.Material>();
+  private readonly loadedGeometries: THREE.BufferGeometry[] = [];
+  private readonly loadedMaterials = new Set<THREE.Material>();
+  private readonly loadedTextures = new Set<THREE.Texture>();
+  private activeTheme: ThemeId = 'gothic';
 
   constructor() {
     this.stoneGrainTex = createMicroGrainTexture(128, false);
@@ -160,29 +224,329 @@ export class PieceFactory {
     };
   }
 
-  public createPiece(id: string, type: PieceType, color: PieceColor): ArticulatedPiece {
+  public setActiveTheme(themeId: ThemeId): void {
+    this.activeTheme = themeId;
+  }
+
+  public getActiveTheme(): ThemeId {
+    return this.activeTheme;
+  }
+
+  public isUsingBlenderModels(themeId: ThemeId = this.activeTheme): boolean {
+    const modelSet = THEMES[themeId].modelSet;
+    return this.setLoadedReady.get(modelSet) === true;
+  }
+
+  public async preload(onProgress?: (percent: number, label: string) => void): Promise<void> {
+    await this.loadThemeModels(this.activeTheme, onProgress);
+  }
+
+  public async loadThemeModels(
+    themeId: ThemeId,
+    onProgress?: (percent: number, label: string) => void,
+  ): Promise<boolean> {
+    this.activeTheme = themeId;
+    const modelSet = THEMES[themeId].modelSet;
+
+    if (this.setLoadedReady.get(modelSet)) {
+      onProgress?.(100, `Blender 5.3 ${MODEL_URLS[modelSet].label} Ready`);
+      return true;
+    }
+
+    const existingPromise = this.setLoadPromises.get(modelSet);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const loadPromise = (async (): Promise<boolean> => {
+      if (typeof window === 'undefined' || typeof fetch === 'undefined') {
+        return false;
+      }
+
+      const urls = MODEL_URLS[modelSet];
+      const loader = new GLTFLoader();
+      try {
+        onProgress?.(15, `Loading Blender 5.3 ${urls.label} (White)...`);
+        const whiteGltf = await loader.loadAsync(urls.w);
+        this.registerGltfSet(modelSet, whiteGltf.scene, 'w');
+
+        onProgress?.(65, `Loading Blender 5.3 ${urls.label} (Black)...`);
+        const blackGltf = await loader.loadAsync(urls.b);
+        this.registerGltfSet(modelSet, blackGltf.scene, 'b');
+
+        const whiteCount = Object.keys(this.rigsBySet[modelSet].w).length;
+        const blackCount = Object.keys(this.rigsBySet[modelSet].b).length;
+        const ok = whiteCount === PIECE_TYPES.length && blackCount === PIECE_TYPES.length;
+        this.setLoadedReady.set(modelSet, ok);
+
+        if (ok) {
+          onProgress?.(100, `Blender 5.3 ${urls.label} Ready`);
+        }
+        return ok;
+      } catch (err) {
+        console.warn(`[PieceFactory] Falling back to procedural rigs for ${modelSet}:`, err);
+        this.setLoadedReady.set(modelSet, false);
+        return false;
+      }
+    })();
+
+    this.setLoadPromises.set(modelSet, loadPromise);
+    return loadPromise;
+  }
+
+  private registerGltfSet(
+    modelSet: PieceModelSet,
+    gltfScene: THREE.Group,
+    color: PieceColor,
+  ): void {
+    gltfScene.updateMatrixWorld(true);
+    for (const type of PIECE_TYPES) {
+      const rig = this.bakeGlbRig(gltfScene, type);
+      if (rig) {
+        this.rigsBySet[modelSet][color][type] = rig;
+      }
+    }
+  }
+
+  private trackMaterial(mat: THREE.Material | THREE.Material[]): THREE.Material | THREE.Material[] {
+    const list = Array.isArray(mat) ? mat : [mat];
+    for (const m of list) {
+      if (!this.loadedMaterials.has(m)) {
+        this.loadedMaterials.add(m);
+        const std = m as THREE.MeshStandardMaterial;
+        if ('envMapIntensity' in std) {
+          std.envMapIntensity = 1.15;
+          std.needsUpdate = true;
+        }
+        const texKeys: Array<keyof THREE.MeshStandardMaterial> = [
+          'map',
+          'roughnessMap',
+          'metalnessMap',
+          'normalMap',
+          'aoMap',
+          'emissiveMap',
+        ];
+        for (const k of texKeys) {
+          const tex = std[k];
+          if (tex instanceof THREE.Texture) {
+            this.loadedTextures.add(tex);
+          }
+        }
+      }
+    }
+    return mat;
+  }
+
+  private bakeGlbRig(gltfScene: THREE.Group, type: PieceType): BakedPieceRig | null {
+    const pieceNode = gltfScene.getObjectByName(`Piece_${type}`);
+    if (!pieceNode) {
+      return null;
+    }
+
+    pieceNode.updateMatrixWorld(true);
+    const invRootWorld = new THREE.Matrix4().copy(pieceNode.matrixWorld).invert();
+    const getPosInPieceSpace = (node: THREE.Object3D | undefined): THREE.Vector3 | undefined => {
+      if (!node) return undefined;
+      return new THREE.Vector3().setFromMatrixPosition(node.matrixWorld).applyMatrix4(invRootWorld);
+    };
+
+    const bodyWorld = getPosInPieceSpace(pieceNode.getObjectByName(`Pivot_Body_${type}`));
+    if (!bodyWorld) {
+      return null;
+    }
+    const headWorld = getPosInPieceSpace(pieceNode.getObjectByName(`Pivot_Head_${type}`));
+    const weaponWorld = getPosInPieceSpace(pieceNode.getObjectByName(`Pivot_WeaponArm_${type}`));
+    if (!weaponWorld) {
+      return null;
+    }
+    const shieldWorld = getPosInPieceSpace(pieceNode.getObjectByName(`Pivot_ShieldArm_${type}`));
+
+    const extractParts = (
+      node: THREE.Object3D | undefined,
+      pivotOriginInPiece: THREE.Vector3,
+    ): BakedMeshPart[] => {
+      if (!node) return [];
+      const invPivot = new THREE.Matrix4().makeTranslation(
+        -pivotOriginInPiece.x,
+        -pivotOriginInPiece.y,
+        -pivotOriginInPiece.z,
+      );
+      const parts: BakedMeshPart[] = [];
+      node.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const meshInPiece = new THREE.Matrix4().multiplyMatrices(invRootWorld, mesh.matrixWorld);
+        const finalMat = new THREE.Matrix4().multiplyMatrices(invPivot, meshInPiece);
+        const geo = mesh.geometry.clone();
+        geo.applyMatrix4(finalMat);
+        geo.computeBoundingBox();
+        geo.computeBoundingSphere();
+        this.loadedGeometries.push(geo);
+        parts.push({
+          geometry: geo,
+          material: this.trackMaterial(mesh.material),
+        });
+      });
+      return parts;
+    };
+
+    return {
+      bodyPos: bodyWorld.clone(),
+      headPos: headWorld ? headWorld.clone().sub(bodyWorld) : undefined,
+      weaponPos: weaponWorld.clone().sub(bodyWorld),
+      shieldPos: shieldWorld ? shieldWorld.clone().sub(bodyWorld) : undefined,
+      plinthParts: extractParts(pieceNode.getObjectByName(`Plinth_${type}`), new THREE.Vector3(0, 0, 0)),
+      bodyParts: extractParts(pieceNode.getObjectByName(`Mesh_Body_${type}`), bodyWorld),
+      headParts: headWorld
+        ? extractParts(pieceNode.getObjectByName(`Mesh_Head_${type}`), headWorld)
+        : [],
+      weaponParts: extractParts(pieceNode.getObjectByName(`Mesh_WeaponArm_${type}`), weaponWorld),
+      shieldParts: shieldWorld
+        ? extractParts(pieceNode.getObjectByName(`Mesh_ShieldArm_${type}`), shieldWorld)
+        : [],
+    };
+  }
+
+  private getThemedMaterial(
+    origMat: THREE.Material | THREE.Material[],
+    themeId: ThemeId,
+    color: PieceColor,
+  ): THREE.Material | THREE.Material[] {
+    const pieceCfg = THEMES[themeId].pieces;
+    if (!pieceCfg.overrideColors) {
+      return origMat;
+    }
+
+    const mapSingle = (src: THREE.Material): THREE.Material => {
+      const cacheKey = `${themeId}:${color}:${src.uuid}`;
+      const cached = this.themedMatCache.get(cacheKey);
+      if (cached) return cached;
+
+      const cloned = src.clone() as THREE.MeshPhysicalMaterial;
+      const mName = (src.name || '').toLowerCase();
+
+      if (mName.includes('primary')) {
+        cloned.map = null; // Keep 2K normalMap & roughnessMap while cleanly applying realm stone color
+        cloned.color.setHex(color === 'w' ? pieceCfg.whitePrimaryHex : pieceCfg.blackPrimaryHex);
+        if (pieceCfg.coatWeight !== undefined && 'clearcoat' in cloned) {
+          cloned.clearcoat = pieceCfg.coatWeight;
+        }
+        if (pieceCfg.emissiveHex !== undefined && color === 'b') {
+          cloned.emissive.setHex(pieceCfg.emissiveHex);
+          cloned.emissiveIntensity = (pieceCfg.emissiveIntensity ?? 0.15) * 0.5;
+        }
+      } else if (mName.includes('secondary')) {
+        cloned.map = null;
+        cloned.color.setHex(
+          color === 'w' ? pieceCfg.whiteSecondaryHex : pieceCfg.blackSecondaryHex,
+        );
+      } else if (mName.includes('gold')) {
+        cloned.map = null;
+        cloned.color.setHex(pieceCfg.metalTrimHex);
+        if (pieceCfg.emissiveHex !== undefined) {
+          cloned.emissive.setHex(pieceCfg.emissiveHex);
+          cloned.emissiveIntensity = (pieceCfg.emissiveIntensity ?? 0.15) * 0.65;
+        }
+      } else if (mName.includes('steel')) {
+        cloned.map = null;
+        cloned.color.setHex(color === 'w' ? pieceCfg.steelWhiteHex : pieceCfg.steelBlackHex);
+        if (pieceCfg.emissiveHex !== undefined) {
+          cloned.emissive.setHex(color === 'w' ? pieceCfg.steelWhiteHex : pieceCfg.steelBlackHex);
+          cloned.emissiveIntensity = (pieceCfg.emissiveIntensity ?? 0.18) * 0.85;
+        }
+      }
+
+      cloned.needsUpdate = true;
+      this.themedMatCache.set(cacheKey, cloned);
+      this.loadedMaterials.add(cloned);
+      return cloned;
+    };
+
+    return Array.isArray(origMat) ? origMat.map(mapSingle) : mapSingle(origMat);
+  }
+
+  private instantiateBakedRig(
+    id: string,
+    type: PieceType,
+    color: PieceColor,
+    rig: BakedPieceRig,
+    themeId: ThemeId,
+  ): ArticulatedPiece {
+    const addParts = (group: THREE.Group, parts: BakedMeshPart[]) => {
+      for (const part of parts) {
+        const mat = this.getThemedMaterial(part.material, themeId, color);
+        group.add(new THREE.Mesh(part.geometry, mat));
+      }
+    };
+
+    const root = new THREE.Group();
+    root.userData.blenderModel = true;
+    addParts(root, rig.plinthParts);
+
+    const body = new THREE.Group();
+    body.position.copy(rig.bodyPos);
+    addParts(body, rig.bodyParts);
+    root.add(body);
+
+    let head: THREE.Group | undefined;
+    if (rig.headPos && rig.headParts.length > 0) {
+      head = new THREE.Group();
+      head.position.copy(rig.headPos);
+      addParts(head, rig.headParts);
+      body.add(head);
+    }
+
+    const weaponArm = new THREE.Group();
+    weaponArm.position.copy(rig.weaponPos);
+    addParts(weaponArm, rig.weaponParts);
+    body.add(weaponArm);
+
+    let shieldArm: THREE.Group | undefined;
+    if (rig.shieldPos && rig.shieldParts.length > 0) {
+      shieldArm = new THREE.Group();
+      shieldArm.position.copy(rig.shieldPos);
+      addParts(shieldArm, rig.shieldParts);
+      body.add(shieldArm);
+    }
+
+    return { id, root, body, weaponArm, shieldArm, head, type, color };
+  }
+
+  public createPiece(
+    id: string,
+    type: PieceType,
+    color: PieceColor,
+    themeId: ThemeId = this.activeTheme,
+  ): ArticulatedPiece {
+    const modelSet = THEMES[themeId].modelSet;
+    const ready = this.setLoadedReady.get(modelSet) === true;
+    const baked = ready ? this.rigsBySet[modelSet][color][type] : undefined;
     const pal = this.palettes[color];
     let piece: ArticulatedPiece;
 
-    switch (type) {
-      case 'p':
-        piece = this.buildPawn(id, color, pal);
-        break;
-      case 'r':
-        piece = this.buildRook(id, color, pal);
-        break;
-      case 'n':
-        piece = this.buildKnight(id, color, pal);
-        break;
-      case 'b':
-        piece = this.buildBishop(id, color, pal);
-        break;
-      case 'q':
-        piece = this.buildQueen(id, color, pal);
-        break;
-      case 'k':
-        piece = this.buildKing(id, color, pal);
-        break;
+    if (baked) {
+      piece = this.instantiateBakedRig(id, type, color, baked, themeId);
+    } else {
+      switch (type) {
+        case 'p':
+          piece = this.buildPawn(id, color, pal);
+          break;
+        case 'r':
+          piece = this.buildRook(id, color, pal);
+          break;
+        case 'n':
+          piece = this.buildKnight(id, color, pal);
+          break;
+        case 'b':
+          piece = this.buildBishop(id, color, pal);
+          break;
+        case 'q':
+          piece = this.buildQueen(id, color, pal);
+          break;
+        case 'k':
+          piece = this.buildKing(id, color, pal);
+          break;
+      }
     }
 
     // Default board facing: White looks toward -Z (Math.PI), Black looks toward +Z (0).
@@ -211,6 +575,21 @@ export class PieceFactory {
       geo.dispose();
     }
     this.geoCache.clear();
+
+    for (const geo of this.loadedGeometries) {
+      geo.dispose();
+    }
+    this.loadedGeometries.length = 0;
+
+    for (const mat of this.loadedMaterials) {
+      mat.dispose();
+    }
+    this.loadedMaterials.clear();
+
+    for (const tex of this.loadedTextures) {
+      tex.dispose();
+    }
+    this.loadedTextures.clear();
 
     const disposedMats = new Set<THREE.Material>();
     for (const pal of Object.values(this.palettes)) {

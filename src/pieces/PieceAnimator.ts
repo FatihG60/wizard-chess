@@ -218,12 +218,42 @@ export class PieceAnimator {
   private readonly animatingIds = new Set<string>();
   private readonly phaseCache = new Map<string, number>();
 
+  private readonly hoverBlends = new Map<string, number>();
+  private readonly selectBlends = new Map<string, number>();
+  private readonly victoryBlends = new Map<string, number>();
+
+  private hoveredPieceId: string | null = null;
+  private selectedPieceId: string | null = null;
+  private checkedKingId: string | null = null;
+  private draggingPieceId: string | null = null;
+
+  public setHoveredPiece(pieceId: string | null): void {
+    this.hoveredPieceId = pieceId;
+  }
+
+  public setSelectedPiece(pieceId: string | null): void {
+    this.selectedPieceId = pieceId;
+  }
+
+  public setCheckedKing(kingId: string | null): void {
+    this.checkedKingId = kingId;
+  }
+
+  public setDraggingPiece(pieceId: string | null): void {
+    this.draggingPieceId = pieceId;
+  }
+
   public placeAtSquare(piece: ArticulatedPiece, square: Square): void {
     this.bumpToken(piece.id);
     this.animatingIds.delete(piece.id);
     piece.root.userData.defeated = false;
+    piece.root.userData.defending = false;
+    piece.root.userData.victorySalute = false;
     piece.root.visible = true;
     piece.root.scale.set(1, 1, 1);
+    this.hoverBlends.delete(piece.id);
+    this.selectBlends.delete(piece.id);
+    this.victoryBlends.delete(piece.id);
 
     const { x, z } = squareToWorld(square);
     piece.root.position.set(x, 0, z);
@@ -237,9 +267,11 @@ export class PieceAnimator {
     from: Square,
     to: Square,
     isKnight?: boolean,
+    onLand?: () => void,
   ): Promise<void> {
     if (from === to) {
       this.placeAtSquare(piece, to);
+      onLand?.();
       return;
     }
 
@@ -247,23 +279,22 @@ export class PieceAnimator {
     const isAlive = () => this.animTokens.get(piece.id) === token;
     this.animatingIds.add(piece.id);
     piece.root.userData.defeated = false;
+    piece.root.userData.victorySalute = false;
     this.resetRig(piece);
 
     const fromPos = squareToWorld(from);
     const toPos = squareToWorld(to);
     const knightLeap = isKnight ?? piece.type === 'n';
-    const durationMs = knightLeap ? 520 : 420;
-
     const dx = toPos.x - fromPos.x;
     const dz = toPos.z - fromPos.z;
+    const dist = Math.hypot(dx, dz) || 1;
     const restYaw = defaultYaw(piece.color);
     const startYaw = piece.root.rotation.y;
     const travelYaw = Math.atan2(dx, dz);
 
-    // Project world travel direction into the piece's rest-facing local space for natural momentum lean.
+    // Project world travel direction into piece's rest-facing local space for natural momentum lean.
     const cosY = Math.cos(restYaw);
     const sinY = Math.sin(restYaw);
-    const dist = Math.hypot(dx, dz) || 1;
     const ndx = dx / dist;
     const ndz = dz / dist;
     const localForward = ndx * sinY + ndz * cosY;
@@ -271,6 +302,21 @@ export class PieceAnimator {
 
     const restBodyRot = getRestRot(piece.body);
     const restWeaponRot = getRestRot(piece.weaponArm);
+    const restShieldRot = piece.shieldArm ? getRestRot(piece.shieldArm) : null;
+
+    if (knightLeap) {
+      // Warhorse rears up proudly on hind legs before leaping
+      await this.runTween(isAlive, 120, (t) => {
+        const rear = Math.sin(t * Math.PI * 0.5);
+        piece.body.rotation.x = restBodyRot.x - rear * 0.34;
+        piece.root.position.set(fromPos.x, rear * 0.09, fromPos.z);
+        piece.weaponArm.rotation.x = restWeaponRot.x - rear * 0.28;
+      });
+      if (!isAlive()) return;
+    }
+
+    const durationMs = knightLeap ? 500 : Math.min(620, 360 + dist * 42);
+    const marchSteps = Math.max(2, Math.round(dist * 1.4));
 
     await this.runTween(isAlive, durationMs, (t) => {
       const e = easeInOutCubic(t);
@@ -279,30 +325,44 @@ export class PieceAnimator {
 
       if (knightLeap) {
         const arc = Math.sin(t * Math.PI);
-        piece.root.position.set(x, arc * 1.18, z);
+        piece.root.position.set(x, arc * 1.24, z);
 
-        // Turn cleanly toward leap vector on ascent and settle back to board facing on landing.
         const turnWeight = Math.sin(t * Math.PI);
         const yawDelta = shortestAngleDelta(startYaw, travelYaw);
         piece.root.rotation.y = startYaw + yawDelta * turnWeight;
 
-        // Warhorse rears during ascent then pitches forward into landing.
-        const pitch = t < 0.5 ? -0.26 * Math.sin(t * Math.PI * 2) : 0.16 * Math.sin((t - 0.5) * Math.PI * 2);
+        const pitch =
+          t < 0.5
+            ? -0.28 * Math.cos(t * Math.PI)
+            : 0.18 * Math.sin((t - 0.5) * Math.PI * 2);
         piece.body.rotation.x = restBodyRot.x + pitch;
-        piece.weaponArm.rotation.x = restWeaponRot.x - arc * 0.24;
+        piece.weaponArm.rotation.x = restWeaponRot.x - arc * 0.28;
       } else {
-        const lift = Math.sin(t * Math.PI) * 0.065;
-        piece.root.position.set(x, lift, z);
+        // Armored footstep march cadence with alternating stride roll & weapon swing
+        const stepPhase = t * Math.PI * marchSteps;
+        const stepLift = Math.abs(Math.sin(stepPhase)) * 0.068;
+        const strideSwing = Math.sin(stepPhase) * Math.sin(t * Math.PI);
+        const leanEnvelope = Math.sin(t * Math.PI);
+
+        piece.root.position.set(x, stepLift, z);
         piece.root.rotation.y = restYaw;
 
-        const leanEnvelope = Math.sin(t * Math.PI);
-        piece.body.rotation.x = restBodyRot.x + localForward * leanEnvelope * 0.085;
-        piece.body.rotation.z = restBodyRot.z - localRight * leanEnvelope * 0.075;
+        piece.body.rotation.x = restBodyRot.x + localForward * leanEnvelope * 0.095;
+        piece.body.rotation.z =
+          restBodyRot.z - localRight * leanEnvelope * 0.065 + strideSwing * 0.055;
+
+        piece.weaponArm.rotation.x =
+          restWeaponRot.x + (piece.type === 'k' ? -0.14 : -0.22) * leanEnvelope + strideSwing * 0.16;
+        if (piece.shieldArm && restShieldRot) {
+          piece.shieldArm.rotation.x =
+            restShieldRot.x + (piece.type === 'k' ? -0.14 : -strideSwing * 0.14);
+        }
       }
     });
 
     if (isAlive()) {
       this.placeAtSquare(piece, to);
+      onLand?.();
     }
   }
 
@@ -313,11 +373,17 @@ export class PieceAnimator {
     to: Square,
     capturedSquare: Square,
     onImpact: () => void,
+    onStrikeVFX?: (
+      attackerType: PieceType,
+      attackerPos: { x: number; z: number },
+      targetPos: { x: number; z: number },
+    ) => void,
   ): Promise<void> {
     const token = this.bumpToken(attacker.id);
     const isAlive = () => this.animTokens.get(attacker.id) === token;
     this.animatingIds.add(attacker.id);
     attacker.root.userData.defeated = false;
+    victim.root.userData.defending = true;
     this.resetRig(attacker);
 
     const fromPos = squareToWorld(from);
@@ -341,37 +407,75 @@ export class PieceAnimator {
     const startYaw = attacker.root.rotation.y;
     const yawToTarget = shortestAngleDelta(startYaw, faceCapYaw);
 
-    // 1. Turn smoothly to face the victim on capturedSquare
-    await this.runTween(isAlive, 175, (t) => {
-      attacker.root.rotation.y = startYaw + yawToTarget * easeInOutCubic(t);
-    });
-    if (!isAlive()) return;
+    // Victim turns to brace defensively against attacker
+    const victimStartYaw = victim.root.rotation.y;
+    const faceAttackerYaw = Math.atan2(-dirX, -dirZ);
+    const victimYawDelta = shortestAngleDelta(victimStartYaw, faceAttackerYaw);
+    const vBodyRestRot = getRestRot(victim.body);
+    const vShieldRestRot = victim.shieldArm ? getRestRot(victim.shieldArm) : null;
+    const vWeaponRestRot = getRestRot(victim.weaponArm);
 
-    // 2. Advance to striking distance just short of capturedSquare (~0.62 units away)
+    const applyVictimBrace = (amt: number, tremble = 0) => {
+      victim.root.rotation.y = victimStartYaw + victimYawDelta * Math.min(1, amt * 1.4);
+      victim.body.rotation.x = vBodyRestRot.x - 0.16 * amt + Math.sin(tremble * 38) * 0.03 * amt;
+      victim.body.rotation.z = vBodyRestRot.z + Math.cos(tremble * 31) * 0.025 * amt;
+      if (victim.shieldArm && vShieldRestRot) {
+        victim.shieldArm.rotation.x = vShieldRestRot.x - 0.55 * amt;
+      }
+      victim.weaponArm.rotation.x = vWeaponRestRot.x - 0.35 * amt;
+    };
+
+    // 1. Turn smoothly to face the victim on capturedSquare while victim begins defensive brace
+    await this.runTween(isAlive, 175, (t) => {
+      const e = easeInOutCubic(t);
+      attacker.root.rotation.y = startYaw + yawToTarget * e;
+      applyVictimBrace(e * 0.65, t);
+    });
+    if (!isAlive()) {
+      victim.root.userData.defending = false;
+      return;
+    }
+
+    // 2. Advance to striking distance (Queen performs a levitating 360 valkyrie spin!)
     const isKnight = attacker.type === 'n';
-    const advanceMs = isKnight ? 330 : 250;
+    const isQueen = attacker.type === 'q';
+    const advanceMs = isKnight ? 330 : 270;
     const restBodyRot = getRestRot(attacker.body);
     await this.runTween(isAlive, advanceMs, (t) => {
       const e = easeInOutCubic(t);
       const x = lerp(fromPos.x, strikePos.x, e);
       const z = lerp(fromPos.z, strikePos.z, e);
       const arc = Math.sin(t * Math.PI);
-      const y = isKnight ? arc * 0.85 : arc * 0.045;
+      const y = isKnight ? arc * 0.92 : isQueen ? arc * 0.24 : arc * 0.055;
       attacker.root.position.set(x, y, z);
-      attacker.body.rotation.x = restBodyRot.x + (isKnight ? -0.14 * arc : 0.07 * arc);
+      attacker.body.rotation.x = restBodyRot.x + (isKnight ? -0.14 * arc : 0.08 * arc);
+      if (isQueen) {
+        attacker.root.rotation.y = faceCapYaw + Math.PI * 2 * e;
+      }
+      applyVictimBrace(0.65 + e * 0.35, t + 1);
     });
-    if (!isAlive()) return;
+    if (!isAlive()) {
+      victim.root.userData.defending = false;
+      return;
+    }
 
     attacker.root.position.set(strikePos.x, 0, strikePos.z);
+    attacker.root.rotation.y = faceCapYaw;
     const poses = ARCHETYPE_ATTACK_POSES[attacker.type];
 
-    // 3. Wind up weaponArm & body coil
+    // 3. Wind up weaponArm & body coil while victim braces hard
     await this.runTween(isAlive, 215, (t) => {
       applyPoseBlend(attacker, NEUTRAL_POSE, poses.windup, easeOutCubic(t));
+      applyVictimBrace(1.0, t + 2);
     });
-    if (!isAlive()) return;
+    if (!isAlive()) {
+      victim.root.userData.defending = false;
+      return;
+    }
 
-    // 4. Explosive strike forward, triggering onImpact ONCE at peak contact
+    // 4. Explosive strike forward, triggering weapon VFX & onImpact at peak contact
+    onStrikeVFX?.(attacker.type, strikePos, capPos);
+
     let impactFired = false;
     await this.runTween(isAlive, 130, (t) => {
       applyPoseBlend(attacker, poses.windup, poses.strike, easeInQuad(t));
@@ -379,10 +483,14 @@ export class PieceAnimator {
 
     if (isAlive() && !impactFired) {
       impactFired = true;
+      victim.root.userData.defending = false;
       victim.root.visible = false;
       onImpact();
     }
-    if (!isAlive()) return;
+    if (!isAlive()) {
+      victim.root.userData.defending = false;
+      return;
+    }
 
     // Hold peak follow-through briefly for dramatic impact readability
     await this.waitMs(isAlive, 165);
@@ -402,6 +510,15 @@ export class PieceAnimator {
 
     if (isAlive()) {
       this.placeAtSquare(attacker, to);
+    }
+  }
+
+  public animateVictorySalute(pieces: Iterable<ArticulatedPiece>, winnerColor: PieceColor): void {
+    for (const piece of pieces) {
+      if (!piece.root.visible || piece.root.userData.defeated) continue;
+      if (piece.color === winnerColor) {
+        piece.root.userData.victorySalute = true;
+      }
     }
   }
 
@@ -435,9 +552,17 @@ export class PieceAnimator {
     }
   }
 
-  public updateIdle(pieces: Iterable<ArticulatedPiece>, elapsed: number): void {
+  public updateIdle(pieces: Iterable<ArticulatedPiece>, elapsed: number, dt = 0.016): void {
+    const smooth = 1 - Math.exp(-10 * Math.min(0.05, Math.max(0.001, dt)));
+
     for (const piece of pieces) {
-      if (!piece.root.visible || piece.root.userData.defeated || this.animatingIds.has(piece.id)) {
+      if (
+        !piece.root.visible ||
+        piece.root.userData.defeated ||
+        piece.root.userData.defending ||
+        this.animatingIds.has(piece.id) ||
+        this.draggingPieceId === piece.id
+      ) {
         continue;
       }
 
@@ -447,29 +572,65 @@ export class PieceAnimator {
         this.phaseCache.set(piece.id, phase);
       }
 
+      const targetSelect = this.selectedPieceId === piece.id ? 1 : 0;
+      const targetHover = this.hoveredPieceId === piece.id && targetSelect === 0 ? 1 : 0;
+      const targetVictory = piece.root.userData.victorySalute ? 1 : 0;
+      const isCheckedKing = this.checkedKingId === piece.id ? 1 : 0;
+
+      const selectAmt = lerp(this.selectBlends.get(piece.id) ?? 0, targetSelect, smooth);
+      const hoverAmt = lerp(this.hoverBlends.get(piece.id) ?? 0, targetHover, smooth);
+      const victoryAmt = lerp(this.victoryBlends.get(piece.id) ?? 0, targetVictory, smooth);
+
+      this.selectBlends.set(piece.id, selectAmt);
+      this.hoverBlends.set(piece.id, hoverAmt);
+      this.victoryBlends.set(piece.id, victoryAmt);
+
       const breath = Math.sin(elapsed * 1.45 + phase);
       const sway = Math.sin(elapsed * 1.45 + phase - 0.65);
       const glance = Math.sin(elapsed * 0.72 + phase * 1.37);
 
+      // Levitation on selection / slight alert lift on hover
+      const levitation =
+        selectAmt * (0.11 + Math.sin(elapsed * 4.2) * 0.022) +
+        hoverAmt * 0.036 +
+        victoryAmt * Math.max(0, Math.sin(elapsed * 5.0 + phase)) * 0.045;
+      piece.root.position.y = levitation;
+
       const bPos = getRestPos(piece.body);
       const bRot = getRestRot(piece.body);
-      piece.body.position.y = bPos.y + breath * 0.0045;
-      piece.body.rotation.x = bRot.x + breath * 0.011;
+      piece.body.position.y = bPos.y + breath * 0.0045 - isCheckedKing * 0.024;
+      piece.body.rotation.x =
+        bRot.x + breath * 0.011 + selectAmt * 0.06 + isCheckedKing * 0.11 - victoryAmt * 0.08;
 
+      // Weapon ready stance on selection, celebratory raise on victory salute
       const wRot = getRestRot(piece.weaponArm);
-      piece.weaponArm.rotation.x = wRot.x + sway * 0.022;
+      const readyWeaponX = piece.type === 'k' ? -0.92 : piece.type === 'r' ? -0.18 : -0.48;
+      const saluteWeaponX = piece.type === 'k' ? -2.2 : piece.type === 'r' ? -0.25 : -1.28;
+      const salutePulse = victoryAmt * Math.sin(elapsed * 5.0 + phase) * 0.14;
+      piece.weaponArm.rotation.x =
+        wRot.x +
+        sway * 0.022 +
+        selectAmt * readyWeaponX +
+        hoverAmt * (readyWeaponX * 0.35) +
+        victoryAmt * saluteWeaponX +
+        salutePulse;
 
       if (piece.shieldArm) {
         const sRot = getRestRot(piece.shieldArm);
-        // Keep King's paired two-handed grip locked onto the greatsword hilt during idle breathing.
+        const readyShieldX = piece.type === 'k' ? -0.92 : -0.28;
+        const victoryShieldX = piece.type === 'k' ? -2.2 : -0.35;
         piece.shieldArm.rotation.x =
-          piece.type === 'k' ? sRot.x + sway * 0.022 : sRot.x - sway * 0.014;
+          sRot.x +
+          (piece.type === 'k' ? sway * 0.022 : -sway * 0.014) +
+          selectAmt * readyShieldX +
+          victoryAmt * victoryShieldX +
+          (piece.type === 'k' ? salutePulse : 0);
       }
 
       if (piece.head) {
         const hRot = getRestRot(piece.head);
-        piece.head.rotation.y = hRot.y + glance * 0.026;
-        piece.head.rotation.x = hRot.x + breath * 0.009;
+        piece.head.rotation.y = hRot.y + glance * 0.026 * (1 - selectAmt);
+        piece.head.rotation.x = hRot.x + breath * 0.009 - victoryAmt * 0.12 + isCheckedKing * 0.08;
       }
     }
   }

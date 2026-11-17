@@ -1,5 +1,15 @@
 import * as THREE from 'three';
-import { LegalMoveOption, PieceColor, Square, squareToWorld } from '../types';
+import { THEMES } from '../themes';
+import { LegalMoveOption, PieceColor, PieceType, Square, ThemeId, squareToWorld } from '../types';
+
+interface TransientVFX {
+  group: THREE.Group;
+  materials: THREE.Material[];
+  geometries: THREE.BufferGeometry[];
+  age: number;
+  lifetime: number;
+  onUpdate: (t: number) => void;
+}
 
 interface DebrisShard {
   mesh: THREE.Mesh;
@@ -65,6 +75,13 @@ export class CombatFX {
 
   private readonly shards: DebrisShard[] = [];
   private readonly smokePuffs: SmokePuff[] = [];
+  private readonly transientVfx: TransientVFX[] = [];
+  private readonly vfxGroup: THREE.Group;
+
+  private selectedAuraGroup: THREE.Group | null = null;
+  private selectedOuterRing: THREE.Mesh | null = null;
+  private selectedInnerRing: THREE.Mesh | null = null;
+  private currentTheme: ThemeId = 'gothic';
 
   private elapsed = 0;
 
@@ -74,9 +91,11 @@ export class CombatFX {
     this.highlightGroup = new THREE.Group();
     this.checkGroup = new THREE.Group();
     this.debrisGroup = new THREE.Group();
+    this.vfxGroup = new THREE.Group();
     this.scene.add(this.highlightGroup);
     this.scene.add(this.checkGroup);
     this.scene.add(this.debrisGroup);
+    this.scene.add(this.vfxGroup);
 
     this.planeGeo = new THREE.PlaneGeometry(1, 1);
     this.planeGeo.rotateX(-Math.PI / 2);
@@ -172,6 +191,14 @@ export class CombatFX {
     });
   }
 
+  setTheme(themeId: ThemeId): void {
+    this.currentTheme = themeId;
+    const vfx = THEMES[themeId].combatVfx;
+    this.ivoryShardBaseMat.color.setHex(vfx.whiteShardHex);
+    this.obsidianShardBaseMat.color.setHex(vfx.blackShardHex);
+    this.goldShardBaseMat.color.setHex(vfx.trimShardHex);
+  }
+
   showLegalMoves(selectedSquare: Square | null, moves: LegalMoveOption[]): void {
     this.clearHighlights();
 
@@ -182,6 +209,43 @@ export class CombatFX {
       selMesh.scale.set(0.96, 1, 0.96);
       this.highlightGroup.add(selMesh);
       this.selectedMesh = selMesh;
+
+      // Rotating arcane selection aura underneath levitating selected piece
+      const auraGroup = new THREE.Group();
+      auraGroup.position.set(x, 0.032, z);
+      const themeVfx = THEMES[this.currentTheme].combatVfx;
+
+      const outerGeo = new THREE.RingGeometry(0.36, 0.43, 32);
+      outerGeo.rotateX(-Math.PI / 2);
+      const outerMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(themeVfx.selectHex),
+        transparent: true,
+        opacity: 0.78,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const outerMesh = new THREE.Mesh(outerGeo, outerMat);
+      auraGroup.add(outerMesh);
+
+      const innerGeo = new THREE.RingGeometry(0.24, 0.28, 6);
+      innerGeo.rotateX(-Math.PI / 2);
+      const innerMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(themeVfx.quietHex),
+        transparent: true,
+        opacity: 0.72,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const innerMesh = new THREE.Mesh(innerGeo, innerMat);
+      innerMesh.position.y = 0.004;
+      auraGroup.add(innerMesh);
+
+      this.highlightGroup.add(auraGroup);
+      this.selectedAuraGroup = auraGroup;
+      this.selectedOuterRing = outerMesh;
+      this.selectedInnerRing = innerMesh;
     }
 
     const seenTargets = new Set<string>();
@@ -209,12 +273,243 @@ export class CombatFX {
   }
 
   clearHighlights(): void {
+    if (this.selectedOuterRing) {
+      this.selectedOuterRing.geometry.dispose();
+      (this.selectedOuterRing.material as THREE.Material).dispose();
+    }
+    if (this.selectedInnerRing) {
+      this.selectedInnerRing.geometry.dispose();
+      (this.selectedInnerRing.material as THREE.Material).dispose();
+    }
     while (this.highlightGroup.children.length > 0) {
       this.highlightGroup.remove(this.highlightGroup.children[0]);
     }
     this.quietMeshes.length = 0;
     this.captureMeshes.length = 0;
     this.selectedMesh = null;
+    this.selectedAuraGroup = null;
+    this.selectedOuterRing = null;
+    this.selectedInnerRing = null;
+  }
+
+  spawnLandingPulse(worldPos: { x: number; z: number }): void {
+    const themeVfx = THEMES[this.currentTheme].combatVfx;
+    const group = new THREE.Group();
+    group.position.set(worldPos.x, 0.03, worldPos.z);
+
+    const geo = new THREE.RingGeometry(0.16, 0.28, 28);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({
+      color: themeVfx.slashHex,
+      transparent: true,
+      opacity: 0.65,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    group.add(mesh);
+
+    this.vfxGroup.add(group);
+    this.transientVfx.push({
+      group,
+      materials: [mat],
+      geometries: [geo],
+      age: 0,
+      lifetime: 0.34,
+      onUpdate: (t) => {
+        const s = 1 + t * 1.9;
+        mesh.scale.set(s, 1, s);
+        mat.opacity = 0.65 * Math.pow(1 - t, 1.5);
+      },
+    });
+  }
+
+  spawnAttackVFX(
+    attackerType: PieceType,
+    attackerPos: { x: number; z: number },
+    targetPos: { x: number; z: number },
+  ): void {
+    const themeVfx = THEMES[this.currentTheme].combatVfx;
+    const dx = targetPos.x - attackerPos.x;
+    const dz = targetPos.z - attackerPos.z;
+    const yaw = Math.atan2(dx, dz);
+
+    const group = new THREE.Group();
+    const materials: THREE.Material[] = [];
+    const geometries: THREE.BufferGeometry[] = [];
+    let lifetime = 0.38;
+    let onUpdate: (t: number) => void = () => {};
+
+    if (attackerType === 'p' || attackerType === 'k') {
+      // Glowing crescent sword / greatsword slash arc
+      const radius = attackerType === 'k' ? 0.85 : 0.56;
+      const arcGeo = new THREE.TorusGeometry(radius, attackerType === 'k' ? 0.065 : 0.042, 8, 28, Math.PI * 0.85);
+      const arcMat = new THREE.MeshBasicMaterial({
+        color: attackerType === 'k' ? themeVfx.magicHex : themeVfx.slashHex,
+        transparent: true,
+        opacity: 0.92,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const arc = new THREE.Mesh(arcGeo, arcMat);
+      arc.position.set(targetPos.x, attackerType === 'k' ? 0.72 : 0.52, targetPos.z);
+      arc.rotation.y = yaw;
+      arc.rotation.z = attackerType === 'k' ? 0.25 : 0.75;
+      group.add(arc);
+      geometries.push(arcGeo);
+      materials.push(arcMat);
+
+      const waveGeo = new THREE.RingGeometry(0.18, 0.34, 32);
+      waveGeo.rotateX(-Math.PI / 2);
+      const waveMat = new THREE.MeshBasicMaterial({
+        color: themeVfx.magicHex,
+        transparent: true,
+        opacity: 0.75,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const wave = new THREE.Mesh(waveGeo, waveMat);
+      wave.position.set(targetPos.x, 0.04, targetPos.z);
+      group.add(wave);
+      geometries.push(waveGeo);
+      materials.push(waveMat);
+
+      lifetime = attackerType === 'k' ? 0.48 : 0.32;
+      onUpdate = (t) => {
+        arc.rotation.x = -0.6 + t * 2.2;
+        const sc = 0.85 + t * 0.55;
+        arc.scale.setScalar(sc);
+        arcMat.opacity = 0.92 * (1 - t);
+        const ws = 1 + t * (attackerType === 'k' ? 3.2 : 2.1);
+        wave.scale.set(ws, 1, ws);
+        waveMat.opacity = 0.75 * Math.pow(1 - t, 1.4);
+      };
+    } else if (attackerType === 'r') {
+      // Heavy seismic siege shockwave
+      const ringGeo = new THREE.RingGeometry(0.22, 0.44, 24);
+      ringGeo.rotateX(-Math.PI / 2);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: themeVfx.magicHex,
+        transparent: true,
+        opacity: 0.88,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.position.set(targetPos.x, 0.04, targetPos.z);
+      group.add(ring);
+      geometries.push(ringGeo);
+      materials.push(ringMat);
+      lifetime = 0.44;
+      onUpdate = (t) => {
+        const s = 1 + t * 3.6;
+        ring.scale.set(s, 1, s);
+        ringMat.opacity = 0.88 * Math.pow(1 - t, 1.5);
+      };
+    } else if (attackerType === 'n') {
+      // Piercing cavalry lance energy cone streak
+      const coneGeo = new THREE.ConeGeometry(0.24, 1.15, 16, 1, true);
+      coneGeo.rotateX(Math.PI / 2);
+      const coneMat = new THREE.MeshBasicMaterial({
+        color: themeVfx.slashHex,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const cone = new THREE.Mesh(coneGeo, coneMat);
+      cone.position.set(targetPos.x, 0.65, targetPos.z);
+      cone.rotation.y = yaw;
+      group.add(cone);
+      geometries.push(coneGeo);
+      materials.push(coneMat);
+      lifetime = 0.28;
+      onUpdate = (t) => {
+        cone.scale.set(1 - t * 0.4, 1 - t * 0.4, 0.8 + t * 1.1);
+        coneMat.opacity = 0.85 * (1 - t);
+      };
+    } else if (attackerType === 'b') {
+      // Skyward holy / arcane pillar beam + ground sigil
+      const beamGeo = new THREE.CylinderGeometry(0.32, 0.45, 5.5, 20, 1, true);
+      const beamMat = new THREE.MeshBasicMaterial({
+        color: themeVfx.magicHex,
+        transparent: true,
+        opacity: 0.72,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const beam = new THREE.Mesh(beamGeo, beamMat);
+      beam.position.set(targetPos.x, 2.75, targetPos.z);
+      group.add(beam);
+      geometries.push(beamGeo);
+      materials.push(beamMat);
+      lifetime = 0.46;
+      onUpdate = (t) => {
+        const w = 1 - t * 0.65;
+        beam.scale.set(w, 1, w);
+        beamMat.opacity = 0.72 * Math.pow(1 - t, 1.3);
+      };
+    } else {
+      // Queen: Forked 3D lightning strike + arcane burst sphere
+      const boltMat = new THREE.MeshBasicMaterial({
+        color: themeVfx.slashHex,
+        transparent: true,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      materials.push(boltMat);
+
+      for (let b = 0; b < 3; b++) {
+        const pts: THREE.Vector3[] = [];
+        const startX = attackerPos.x + (b - 1) * 0.14;
+        const startZ = attackerPos.z + (b - 1) * 0.14;
+        for (let s = 0; s <= 5; s++) {
+          const f = s / 5;
+          const jitter = s === 0 || s === 5 ? 0 : 0.18;
+          pts.push(
+            new THREE.Vector3(
+              THREE.MathUtils.lerp(startX, targetPos.x, f) + (Math.random() - 0.5) * jitter,
+              THREE.MathUtils.lerp(1.45, 0.45, f) + Math.sin(f * Math.PI) * 0.35,
+              THREE.MathUtils.lerp(startZ, targetPos.z, f) + (Math.random() - 0.5) * jitter,
+            ),
+          );
+        }
+        const boltGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 12, 0.028, 6, false);
+        geometries.push(boltGeo);
+        group.add(new THREE.Mesh(boltGeo, boltMat));
+      }
+
+      const flashGeo = new THREE.SphereGeometry(0.45, 14, 12);
+      const flashMat = new THREE.MeshBasicMaterial({
+        color: themeVfx.magicHex,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const flash = new THREE.Mesh(flashGeo, flashMat);
+      flash.position.set(targetPos.x, 0.55, targetPos.z);
+      group.add(flash);
+      geometries.push(flashGeo);
+      materials.push(flashMat);
+
+      lifetime = 0.38;
+      onUpdate = (t) => {
+        boltMat.opacity = 0.95 * Math.pow(1 - t, 1.3);
+        const fs = 0.7 + t * 1.4;
+        flash.scale.setScalar(fs);
+        flashMat.opacity = 0.85 * Math.pow(1 - t, 1.6);
+      };
+    }
+
+    this.vfxGroup.add(group);
+    this.transientVfx.push({ group, materials, geometries, age: 0, lifetime, onUpdate });
   }
 
   setCheckIndicator(kingSquare: Square | null, isCheckmate: boolean): void {
@@ -389,6 +684,13 @@ export class CombatFX {
       puff.material.dispose();
     }
     this.smokePuffs.length = 0;
+
+    for (const fx of this.transientVfx) {
+      this.vfxGroup.remove(fx.group);
+      fx.geometries.forEach((g) => g.dispose());
+      fx.materials.forEach((m) => m.dispose());
+    }
+    this.transientVfx.length = 0;
   }
 
   getActiveDebrisCount(): number {
@@ -413,6 +715,27 @@ export class CombatFX {
     for (let i = 0; i < this.captureMeshes.length; i++) {
       const s = 0.9 + Math.sin(this.elapsed * 4.8 + i * 0.3) * 0.04;
       this.captureMeshes[i].scale.set(s, 1, s);
+    }
+
+    if (this.selectedAuraGroup && this.selectedOuterRing && this.selectedInnerRing) {
+      this.selectedOuterRing.rotation.z = this.elapsed * 1.1;
+      this.selectedInnerRing.rotation.z = -this.elapsed * 1.6;
+      const auraScale = 1 + Math.sin(this.elapsed * 3.8) * 0.045;
+      this.selectedAuraGroup.scale.set(auraScale, 1, auraScale);
+    }
+
+    // Step transient weapon & landing VFX
+    for (let i = this.transientVfx.length - 1; i >= 0; i--) {
+      const fx = this.transientVfx[i];
+      fx.age += clampedDt;
+      if (fx.age >= fx.lifetime) {
+        this.vfxGroup.remove(fx.group);
+        fx.geometries.forEach((g) => g.dispose());
+        fx.materials.forEach((m) => m.dispose());
+        this.transientVfx.splice(i, 1);
+      } else {
+        fx.onUpdate(fx.age / fx.lifetime);
+      }
     }
 
     // Pulse threatened King check/checkmate halo
@@ -512,6 +835,7 @@ export class CombatFX {
     this.scene.remove(this.highlightGroup);
     this.scene.remove(this.checkGroup);
     this.scene.remove(this.debrisGroup);
+    this.scene.remove(this.vfxGroup);
 
     this.planeGeo.dispose();
     this.smokeGeo.dispose();

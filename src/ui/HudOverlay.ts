@@ -1,11 +1,14 @@
+import { THEMES, THEME_ORDER } from '../themes';
 import type {
   AIDifficulty,
   CameraPreset,
   GameMode,
   GameSettings,
   GameSnapshot,
+  MusicSourceMode,
   PieceColor,
   PieceType,
+  ThemeId,
 } from '../types';
 
 export interface HudCallbacks {
@@ -47,6 +50,12 @@ const ICON_SOUND_OFF = `<svg ${SVG_ATTRS}><polygon points="11 5 6 9 2 9 2 15 6 1
 const ICON_CLOSE = `<svg ${SVG_ATTRS}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
 
 const ICON_UNDO = `<svg ${SVG_ATTRS}><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>`;
+
+const ICON_REALM = `<svg ${SVG_ATTRS}><polygon points="12 2 15.5 8.5 22 12 15.5 15.5 12 22 8.5 15.5 2 12 8.5 8.5 12 2"/></svg>`;
+
+const ICON_MUSIC_ON = `<svg ${SVG_ATTRS}><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
+
+const ICON_MUSIC_OFF = `<svg ${SVG_ATTRS}><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><line x1="3" y1="3" x2="21" y2="21"/></svg>`;
 
 const SVG_CROWN = `<svg viewBox="0 0 48 36" fill="none" aria-hidden="true">
   <path d="M6 27L4 11l10.5 7.5L24 6l9.5 12.5L44 11l-2 16H6z" fill="rgba(212, 175, 55, 0.16)" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
@@ -124,10 +133,13 @@ export class HudOverlay {
   private modeBadgeEl!: HTMLElement;
 
   // Top-right elements
+  private themeCycleBtnEl!: HTMLButtonElement;
+  private themeLabelEl!: HTMLElement;
   private flipBtnEl!: HTMLButtonElement;
   private flipLabelEl!: HTMLElement;
   private aiMoveBtnEl!: HTMLButtonElement;
   private cameraBtnEl!: HTMLButtonElement;
+  private musicBtnEl!: HTMLButtonElement;
   private soundBtnEl!: HTMLButtonElement;
 
   // Bottom-center elements
@@ -135,16 +147,20 @@ export class HudOverlay {
 
   // Judgment modal elements
   private judgmentBackdropEl!: HTMLElement;
+  private judgmentEyebrowTextEl!: HTMLElement;
   private judgmentHeadlineEl!: HTMLElement;
   private judgmentSubtitleEl!: HTMLElement;
 
   // Lobby modal elements
   private lobbyBackdropEl!: HTMLElement;
+  private themeButtons!: NodeListOf<HTMLButtonElement>;
   private modeButtons!: NodeListOf<HTMLButtonElement>;
   private difficultyButtons!: NodeListOf<HTMLButtonElement>;
   private sideButtons!: NodeListOf<HTMLButtonElement>;
   private cameraButtons!: NodeListOf<HTMLButtonElement>;
+  private musicSourceButtons!: NodeListOf<HTMLButtonElement>;
   private battleCamSwitchEl!: HTMLButtonElement;
+  private musicSwitchEl!: HTMLButtonElement;
   private soundSwitchEl!: HTMLButtonElement;
   private historyCountEl!: HTMLElement;
   private historyListEl!: HTMLElement;
@@ -213,6 +229,7 @@ export class HudOverlay {
   }
 
   public showJudgmentModal(snapshot: GameSnapshot): void {
+    this.judgmentEyebrowTextEl.textContent = THEMES[this.settings.theme].judgmentEyebrow;
     if (snapshot.isCheckmate) {
       this.judgmentHeadlineEl.textContent = 'CHECKMATE';
       if (snapshot.winner === 'w') {
@@ -325,6 +342,10 @@ export class HudOverlay {
           ${ICON_LOBBY}
           <span>Lobby</span>
         </button>
+        <button type="button" class="hud-btn" data-action="cycle-theme" title="Cycle Realm Theme">
+          ${ICON_REALM}
+          <span data-role="theme-label">Gothic</span>
+        </button>
         <button type="button" class="hud-btn" data-action="flip-side">
           ${ICON_FLIP}
           <span data-role="flip-label">Play as Black</span>
@@ -346,6 +367,15 @@ export class HudOverlay {
           aria-label="Toggle Camera View"
         >
           ${ICON_CAMERA_ORBIT}
+        </button>
+        <button
+          type="button"
+          class="hud-btn hud-icon-btn"
+          data-action="music-toggle"
+          title="Music: On (Mute)"
+          aria-label="Toggle Background Music"
+        >
+          ${ICON_MUSIC_ON}
         </button>
         <button
           type="button"
@@ -382,7 +412,7 @@ export class HudOverlay {
           </button>
           <div class="judgment-eyebrow">
             ${SVG_DIAMOND}
-            <span>SANCTUM JUDGMENT</span>
+            <span data-role="judgment-eyebrow-text">SANCTUM JUDGMENT</span>
             ${SVG_DIAMOND}
           </div>
           <div class="judgment-crown">${SVG_CROWN}</div>
@@ -411,6 +441,24 @@ export class HudOverlay {
 
           <div class="lobby-body">
             <div class="lobby-settings">
+              <div class="field-group">
+                <span class="field-label">Realm &amp; 3D Army</span>
+                <div class="theme-grid" role="group" aria-label="Realm Theme">
+                  ${THEME_ORDER.map((id) => {
+                    const t = THEMES[id];
+                    return `
+                      <button type="button" class="theme-card-btn" data-setting-theme="${id}">
+                        <span class="theme-card-head">
+                          <span class="theme-swatch" style="background:${t.accentHex}"></span>
+                          <span class="theme-card-name">${t.name}</span>
+                        </span>
+                        <span class="theme-card-army">${t.armyLabel}</span>
+                      </button>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+
               <div class="field-group">
                 <span class="field-label">Game Mode</span>
                 <div class="seg-group" role="group" aria-label="Game Mode">
@@ -444,6 +492,15 @@ export class HudOverlay {
                 </div>
               </div>
 
+              <div class="field-group">
+                <span class="field-label">Music Score</span>
+                <div class="seg-group" role="group" aria-label="Music Score">
+                  <button type="button" class="seg-btn" data-setting-music-source="auto">Auto</button>
+                  <button type="button" class="seg-btn" data-setting-music-source="theme-synth">Realm Score</button>
+                  <button type="button" class="seg-btn" data-setting-music-source="video-ost">Video OST</button>
+                </div>
+              </div>
+
               <div class="toggle-list">
                 <div class="toggle-row">
                   <span class="toggle-title">Battle Camera Swoop</span>
@@ -459,7 +516,20 @@ export class HudOverlay {
                   </button>
                 </div>
                 <div class="toggle-row">
-                  <span class="toggle-title">Sanctum Audio</span>
+                  <span class="toggle-title">Background Music</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked="true"
+                    class="switch-btn"
+                    data-action="toggle-music-lobby"
+                    aria-label="Background Music"
+                  >
+                    <span class="switch-thumb"></span>
+                  </button>
+                </div>
+                <div class="toggle-row">
+                  <span class="toggle-title">Sanctum Audio (SFX &amp; Master)</span>
                   <button
                     type="button"
                     role="switch"
@@ -551,24 +621,31 @@ export class HudOverlay {
     this.turnLabelEl = this.query('[data-role="turn-label"]');
     this.modeBadgeEl = this.query('[data-role="mode-badge"]');
 
+    this.themeCycleBtnEl = this.query('[data-action="cycle-theme"]');
+    this.themeLabelEl = this.query('[data-role="theme-label"]');
     this.flipBtnEl = this.query('[data-action="flip-side"]');
     this.flipLabelEl = this.query('[data-role="flip-label"]');
     this.aiMoveBtnEl = this.query('[data-action="ai-move"]');
     this.cameraBtnEl = this.query('[data-action="camera-toggle"]');
+    this.musicBtnEl = this.query('[data-action="music-toggle"]');
     this.soundBtnEl = this.query('[data-action="sound-toggle"]');
 
     this.capturedEl = this.query('[data-role="captured-text"]');
 
     this.judgmentBackdropEl = this.query('[data-role="judgment-backdrop"]');
+    this.judgmentEyebrowTextEl = this.query('[data-role="judgment-eyebrow-text"]');
     this.judgmentHeadlineEl = this.query('[data-role="judgment-headline"]');
     this.judgmentSubtitleEl = this.query('[data-role="judgment-subtitle"]');
 
     this.lobbyBackdropEl = this.query('[data-role="lobby-backdrop"]');
+    this.themeButtons = this.container.querySelectorAll('[data-setting-theme]');
     this.modeButtons = this.container.querySelectorAll('[data-setting-mode]');
     this.difficultyButtons = this.container.querySelectorAll('[data-setting-difficulty]');
     this.sideButtons = this.container.querySelectorAll('[data-setting-side]');
     this.cameraButtons = this.container.querySelectorAll('[data-setting-camera]');
+    this.musicSourceButtons = this.container.querySelectorAll('[data-setting-music-source]');
     this.battleCamSwitchEl = this.query('[data-action="toggle-battle-cam"]');
+    this.musicSwitchEl = this.query('[data-action="toggle-music-lobby"]');
     this.soundSwitchEl = this.query('[data-action="toggle-sound-lobby"]');
     this.historyCountEl = this.query('[data-role="history-count"]');
     this.historyListEl = this.query('[data-role="history-list"]');
@@ -588,6 +665,12 @@ export class HudOverlay {
       this.openLobby();
     });
 
+    this.themeCycleBtnEl.addEventListener('click', () => {
+      const idx = THEME_ORDER.indexOf(this.settings.theme);
+      const nextTheme = THEME_ORDER[(idx + 1) % THEME_ORDER.length];
+      this.applySettingsPatch({ theme: nextTheme });
+    });
+
     this.flipBtnEl.addEventListener('click', () => {
       this.callbacks.onFlipSide();
     });
@@ -605,6 +688,10 @@ export class HudOverlay {
       const nextPreset: CameraPreset =
         this.settings.cameraPreset === 'player' ? 'top-down' : 'player';
       this.applySettingsPatch({ cameraPreset: nextPreset });
+    });
+
+    this.musicBtnEl.addEventListener('click', () => {
+      this.applySettingsPatch({ musicEnabled: !this.settings.musicEnabled });
     });
 
     this.soundBtnEl.addEventListener('click', () => {
@@ -657,6 +744,15 @@ export class HudOverlay {
     });
 
     // Lobby setting groups
+    this.themeButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const theme = btn.dataset.settingTheme as ThemeId | undefined;
+        if (theme) {
+          this.applySettingsPatch({ theme });
+        }
+      });
+    });
+
     this.modeButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
         const mode = btn.dataset.settingMode as GameMode | undefined;
@@ -693,8 +789,21 @@ export class HudOverlay {
       });
     });
 
+    this.musicSourceButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const musicSource = btn.dataset.settingMusicSource as MusicSourceMode | undefined;
+        if (musicSource) {
+          this.applySettingsPatch({ musicSource });
+        }
+      });
+    });
+
     this.battleCamSwitchEl.addEventListener('click', () => {
       this.applySettingsPatch({ battleCam: !this.settings.battleCam });
+    });
+
+    this.musicSwitchEl.addEventListener('click', () => {
+      this.applySettingsPatch({ musicEnabled: !this.settings.musicEnabled });
     });
 
     this.soundSwitchEl.addEventListener('click', () => {
@@ -800,8 +909,28 @@ export class HudOverlay {
   }
 
   private syncSettingsUI(): void {
-    const { mode, playerColor, difficulty, cameraPreset, battleCam, soundEnabled } =
-      this.settings;
+    const {
+      mode,
+      playerColor,
+      difficulty,
+      cameraPreset,
+      battleCam,
+      soundEnabled,
+      theme,
+      musicEnabled,
+      musicSource,
+    } = this.settings;
+
+    const themeCfg = THEMES[theme];
+    const rootStyle = document.documentElement.style;
+    rootStyle.setProperty('--gold', themeCfg.accentHex);
+    rootStyle.setProperty('--gold-bright', themeCfg.accentBrightHex);
+    rootStyle.setProperty('--border-gold', `${themeCfg.accentHex}59`);
+    rootStyle.setProperty('--border-gold-strong', `${themeCfg.accentHex}a6`);
+    rootStyle.setProperty('--gold-dim', `${themeCfg.accentHex}1f`);
+
+    this.themeLabelEl.textContent = themeCfg.shortName;
+    this.themeCycleBtnEl.title = `Realm: ${themeCfg.name} (${themeCfg.armyLabel}) — Click to switch`;
 
     // Mode badge fallback when snapshot hasn't arrived yet
     if (!this.snapshot) {
@@ -828,6 +957,13 @@ export class HudOverlay {
     this.cameraBtnEl.title = cameraTitle;
     this.cameraBtnEl.setAttribute('aria-label', cameraTitle);
 
+    // Music toggle button
+    this.musicBtnEl.innerHTML = musicEnabled ? ICON_MUSIC_ON : ICON_MUSIC_OFF;
+    this.musicBtnEl.classList.toggle('is-active', musicEnabled);
+    const musicTitle = musicEnabled ? 'Background Music: On (Mute)' : 'Background Music: Off (Enable)';
+    this.musicBtnEl.title = musicTitle;
+    this.musicBtnEl.setAttribute('aria-label', musicTitle);
+
     // Sound toggle button
     this.soundBtnEl.innerHTML = soundEnabled ? ICON_SOUND_ON : ICON_SOUND_OFF;
     this.soundBtnEl.classList.toggle('is-active', false);
@@ -835,7 +971,10 @@ export class HudOverlay {
     this.soundBtnEl.title = soundTitle;
     this.soundBtnEl.setAttribute('aria-label', soundTitle);
 
-    // Lobby segmented controls
+    // Lobby controls
+    this.themeButtons.forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.settingTheme === theme);
+    });
     this.modeButtons.forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.settingMode === mode);
     });
@@ -848,8 +987,12 @@ export class HudOverlay {
     this.cameraButtons.forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.settingCamera === cameraPreset);
     });
+    this.musicSourceButtons.forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.settingMusicSource === musicSource);
+    });
 
     this.battleCamSwitchEl.setAttribute('aria-checked', String(battleCam));
+    this.musicSwitchEl.setAttribute('aria-checked', String(musicEnabled));
     this.soundSwitchEl.setAttribute('aria-checked', String(soundEnabled));
   }
 

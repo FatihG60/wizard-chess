@@ -6,6 +6,9 @@ export type Square = string; // 'a1' .. 'h8'
 export type GameMode = 'ai' | 'pass-and-play';
 export type AIDifficulty = 'novice' | 'adept' | 'grandmaster';
 export type CameraPreset = 'player' | 'top-down';
+export type ThemeId = 'gothic' | 'samurai' | 'pharaoh' | 'frost' | 'infernal' | 'astral';
+export type PieceModelSet = 'crusader' | 'samurai' | 'pharaoh' | 'astral';
+export type MusicSourceMode = 'auto' | 'theme-synth' | 'video-ost';
 
 export const SQUARE_SIZE = 1.0;
 
@@ -102,4 +105,7 @@ export interface GameSettings {
   cameraPreset: CameraPreset;
   battleCam: boolean;
   soundEnabled: boolean;
+  theme: ThemeId;
+  musicEnabled: boolean;
+  musicSource: MusicSourceMode;
 }

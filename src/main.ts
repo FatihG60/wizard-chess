@@ -5,6 +5,7 @@ import { PieceAnimator } from './pieces/PieceAnimator';
 import { PieceFactory } from './pieces/PieceFactory';
 import { CathedralScene } from './scene/CathedralScene';
 import { CombatFX } from './scene/CombatFX';
+import { THEMES } from './themes';
 import {
   SQUARE_SIZE,
   squareToWorld,
@@ -15,8 +16,10 @@ import {
   type LegalMoveOption,
   type PieceType,
   type Square,
+  type ThemeId,
 } from './types';
 import { HudOverlay } from './ui/HudOverlay';
+import { MusicEngine } from './ui/MusicEngine';
 import { SoundFX } from './ui/SoundFX';
 
 export interface WizardChessState {
@@ -26,6 +29,7 @@ export interface WizardChessState {
   activeDebrisCount: number;
   isAnimating: boolean;
   aiThinking: boolean;
+  usingBlenderModels: boolean;
 }
 
 export interface WizardChessAPI {
@@ -35,6 +39,7 @@ export interface WizardChessAPI {
   newGame: () => void;
   loadFen: (fen: string) => void;
   setCameraPreset: (preset: CameraPreset) => void;
+  setTheme: (theme: ThemeId) => Promise<void>;
 }
 
 declare global {
@@ -81,7 +86,7 @@ function findPieceIdFromObject(obj: THREE.Object3D): string | null {
   return null;
 }
 
-function bootstrap(): void {
+async function bootstrap(): Promise<void> {
   const rawCanvasRoot = document.getElementById('canvas-root');
   const rawHudRoot = document.getElementById('hud-root');
   if (!rawCanvasRoot || !rawHudRoot) {
@@ -97,11 +102,15 @@ function bootstrap(): void {
     cameraPreset: 'player',
     battleCam: true,
     soundEnabled: true,
+    theme: 'gothic',
+    musicEnabled: true,
+    musicSource: 'auto',
   };
 
   let isAnimating = false;
   let aiThinking = false;
   let matchEpoch = 0;
+  let themeSwitchEpoch = 0;
 
   let selectedSquare: Square | null = null;
   let selectedLegalMoves: LegalMoveOption[] = [];
@@ -116,6 +125,12 @@ function bootstrap(): void {
 
   // Declare mutable callbacks bound below after scene/controller instantiation
   const soundFX = new SoundFX(settings.soundEnabled);
+  const musicEngine = new MusicEngine(
+    settings.theme,
+    settings.musicEnabled,
+    settings.soundEnabled,
+    settings.musicSource,
+  );
   const hud = new HudOverlay(hudRoot, settings, {
     onNewGame: () => startNewGame(),
     onFlipSide: () => flipPlayerSide(),
@@ -131,9 +146,12 @@ function bootstrap(): void {
   hud.setLoadingProgress(15, 'Conjuring Gothic Sanctum...');
   const cathedral = new CathedralScene(canvasRoot);
 
-  hud.setLoadingProgress(40, 'Igniting Braziers & Combat Runes...');
+  hud.setLoadingProgress(35, 'Igniting Braziers & Combat Runes...');
   const combatFX = new CombatFX(cathedral.scene);
   const pieceFactory = new PieceFactory();
+  await pieceFactory.preload((pct, label) => {
+    hud.setLoadingProgress(40 + Math.round(pct * 0.35), label);
+  });
   const animator = new PieceAnimator();
   const controller = new ChessController();
   const chessAI = new ChessAI();
@@ -150,11 +168,22 @@ function bootstrap(): void {
     canvasRoot.setAttribute('data-debris-count', String(debrisCount));
     canvasRoot.setAttribute('data-selected-square', selectedSquare ?? '');
     canvasRoot.setAttribute('data-checkmate', String(snapshot.isCheckmate));
+    canvasRoot.setAttribute('data-blender-models', String(pieceFactory.isUsingBlenderModels(settings.theme)));
+    canvasRoot.setAttribute('data-theme', settings.theme);
+  }
+
+  function syncCheckedAndAudioState(snapshot = controller.getSnapshot()): void {
+    const checkedKing = snapshot.checkedKingSquare
+      ? snapshot.pieces.find((p) => p.square === snapshot.checkedKingSquare)
+      : undefined;
+    animator.setCheckedKing(checkedKing?.id ?? null);
+    musicEngine.setCheckState(snapshot.inCheck && !snapshot.isCheckmate);
   }
 
   function clearSelection(): void {
     selectedSquare = null;
     selectedLegalMoves = [];
+    animator.setSelectedPiece(null);
     combatFX.clearHighlights();
     syncDomTelemetry();
   }
@@ -186,7 +215,7 @@ function bootstrap(): void {
 
       let piece = piecesMap.get(bp.id);
       if (!piece) {
-        piece = pieceFactory.createPiece(bp.id, bp.type, bp.color);
+        piece = pieceFactory.createPiece(bp.id, bp.type, bp.color, settings.theme);
         cathedral.scene.add(piece.root);
         piecesMap.set(bp.id, piece);
       }
@@ -194,8 +223,8 @@ function bootstrap(): void {
       animator.placeAtSquare(piece, bp.square);
 
       if (reportLoadingProgress) {
-        const pct = 50 + Math.round(((idx + 1) / total) * 45);
-        hud.setLoadingProgress(pct, 'Forging Ivory & Obsidian Legion...');
+        const pct = 75 + Math.round(((idx + 1) / total) * 20);
+        hud.setLoadingProgress(pct, 'Deploying Ivory & Obsidian Legions...');
       }
     });
   }
@@ -206,8 +235,10 @@ function bootstrap(): void {
       clearSelection();
       return;
     }
+    const pieceAtSquare = controller.getSnapshot().pieces.find((p) => p.square === square);
     selectedSquare = square;
     selectedLegalMoves = moves;
+    animator.setSelectedPiece(pieceAtSquare?.id ?? null);
     combatFX.showLegalMoves(square, moves);
     soundFX.playSelect();
     syncDomTelemetry();
@@ -351,6 +382,9 @@ function bootstrap(): void {
             cathedral.triggerCameraShake(0.14, 280);
             soundFX.playCapture();
           },
+          (atkType, atkPos, tgtPos) => {
+            combatFX.spawnAttackVFX(atkType, atkPos, tgtPos);
+          },
         );
         if (epoch !== matchEpoch) return false;
 
@@ -363,12 +397,15 @@ function bootstrap(): void {
           if (epoch !== matchEpoch) return false;
         }
       } else if (attacker) {
+        const targetWorld = squareToWorld(result.to);
         if (result.rookCastleMove) {
           soundFX.playCastle();
           const rook = piecesMap.get(result.rookCastleMove.rookId);
           if (rook) {
             await Promise.all([
-              animator.animateMove(attacker, result.from, result.to, false),
+              animator.animateMove(attacker, result.from, result.to, false, () => {
+                combatFX.spawnLandingPulse(targetWorld);
+              }),
               animator.animateMove(
                 rook,
                 result.rookCastleMove.from,
@@ -377,7 +414,9 @@ function bootstrap(): void {
               ),
             ]);
           } else {
-            await animator.animateMove(attacker, result.from, result.to, false);
+            await animator.animateMove(attacker, result.from, result.to, false, () => {
+              combatFX.spawnLandingPulse(targetWorld);
+            });
           }
         } else {
           soundFX.playMove();
@@ -386,6 +425,9 @@ function bootstrap(): void {
             result.from,
             result.to,
             result.pieceType === 'n',
+            () => {
+              combatFX.spawnLandingPulse(targetWorld);
+            },
           );
         }
         if (epoch !== matchEpoch) return false;
@@ -400,17 +442,22 @@ function bootstrap(): void {
           result.pieceId,
           result.promotedTo,
           result.color,
+          settings.theme,
         );
         cathedral.scene.add(promotedPiece.root);
         piecesMap.set(result.pieceId, promotedPiece);
         animator.placeAtSquare(promotedPiece, result.to);
+        combatFX.spawnLandingPulse(squareToWorld(result.to));
         soundFX.playPromote();
       }
 
       combatFX.setCheckIndicator(snapshot.checkedKingSquare, snapshot.isCheckmate);
+      syncCheckedAndAudioState(snapshot);
 
       if (snapshot.isCheckmate) {
         soundFX.playCheckmate();
+        const winnerColor = snapshot.turn === 'w' ? 'b' : 'w';
+        animator.animateVictorySalute(piecesMap.values(), winnerColor);
         const defeatedKingData = snapshot.pieces.find(
           (p) => p.type === 'k' && p.color === snapshot.turn,
         );
@@ -537,12 +584,76 @@ function bootstrap(): void {
   }
 
   function resetInteractionFlags(): void {
+    animator.setDraggingPiece(null);
+    animator.setHoveredPiece(null);
     if (activePointer?.dragPiece && activePointer.dragFromSquare) {
       animator.placeAtSquare(activePointer.dragPiece, activePointer.dragFromSquare);
     }
     activePointer = null;
     canvas.style.cursor = '';
     clearSelection();
+  }
+
+  async function applyThemeInternal(themeId: ThemeId): Promise<void> {
+    const myEpoch = ++themeSwitchEpoch;
+    settings = { ...settings, theme: themeId };
+    const cfg = THEMES[themeId];
+    const needsDownload = !pieceFactory.isUsingBlenderModels(themeId);
+
+    try {
+      if (needsDownload) {
+        hud.setLoadingProgress(25, cfg.loadingLabel);
+      }
+
+      await pieceFactory.loadThemeModels(themeId, (pct, label) => {
+        if (myEpoch === themeSwitchEpoch && needsDownload) {
+          hud.setLoadingProgress(25 + Math.round(pct * 0.65), label);
+        }
+      });
+
+      if (myEpoch !== themeSwitchEpoch || settings.theme !== themeId) return;
+
+      cathedral.setTheme(themeId);
+      combatFX.setTheme(themeId);
+      musicEngine.setTheme(themeId);
+
+      // Rebuild all living pieces in their current FEN squares using the new realm's 3D army
+      for (const [id, existing] of piecesMap.entries()) {
+        cathedral.scene.remove(existing.root);
+        piecesMap.delete(id);
+      }
+
+      const snapshot = controller.getSnapshot();
+      syncBoardMeshes(snapshot);
+      combatFX.setCheckIndicator(snapshot.checkedKingSquare, snapshot.isCheckmate);
+      syncCheckedAndAudioState(snapshot);
+
+      if (selectedSquare) {
+        const selPiece = snapshot.pieces.find((p) => p.square === selectedSquare);
+        if (selPiece) {
+          animator.setSelectedPiece(selPiece.id);
+          combatFX.showLegalMoves(selectedSquare, selectedLegalMoves);
+        }
+      }
+
+      if (snapshot.isCheckmate && snapshot.winner && snapshot.winner !== 'draw') {
+        animator.animateVictorySalute(piecesMap.values(), snapshot.winner);
+      }
+
+      hud.updateFromSnapshot(snapshot, settings, aiThinking);
+      syncDomTelemetry(snapshot);
+    } catch (err) {
+      console.error('[WizardChess] Theme switch failed:', err);
+    } finally {
+      if (myEpoch === themeSwitchEpoch) {
+        if (needsDownload) {
+          hud.setLoadingProgress(100, `${cfg.name} Ready`);
+          window.setTimeout(() => hud.hideLoading(), 120);
+        } else {
+          hud.hideLoading();
+        }
+      }
+    }
   }
 
   function startNewGame(): void {
@@ -556,6 +667,7 @@ function bootstrap(): void {
     const snapshot = controller.reset();
     syncBoardMeshes(snapshot);
     combatFX.setCheckIndicator(snapshot.checkedKingSquare, snapshot.isCheckmate);
+    syncCheckedAndAudioState(snapshot);
     cathedral.setCameraPreset(settings.cameraPreset, settings.playerColor);
     hud.updateFromSnapshot(snapshot, settings, aiThinking);
     syncDomTelemetry(snapshot);
@@ -580,11 +692,15 @@ function bootstrap(): void {
 
     syncBoardMeshes(snapshot);
     combatFX.setCheckIndicator(snapshot.checkedKingSquare, snapshot.isCheckmate);
+    syncCheckedAndAudioState(snapshot);
     cathedral.setCameraPreset(settings.cameraPreset, settings.playerColor);
     hud.updateFromSnapshot(snapshot, settings, aiThinking);
     syncDomTelemetry(snapshot);
 
     if (snapshot.isGameOver) {
+      if (snapshot.isCheckmate && snapshot.winner && snapshot.winner !== 'draw') {
+        animator.animateVictorySalute(piecesMap.values(), snapshot.winner);
+      }
       hud.showJudgmentModal(snapshot);
     }
   }
@@ -623,6 +739,17 @@ function bootstrap(): void {
 
     if (patch.soundEnabled !== undefined) {
       soundFX.setEnabled(settings.soundEnabled);
+      musicEngine.setMasterSoundEnabled(settings.soundEnabled);
+    }
+    if (patch.musicEnabled !== undefined) {
+      musicEngine.setMusicEnabled(settings.musicEnabled);
+    }
+    if (patch.musicSource !== undefined) {
+      musicEngine.setMusicSource(settings.musicSource);
+    }
+
+    if (patch.theme !== undefined && patch.theme !== prev.theme) {
+      void applyThemeInternal(patch.theme);
     }
 
     const sideOrModeChanged =
@@ -681,6 +808,7 @@ function bootstrap(): void {
     const snapshot = controller.getSnapshot();
     syncBoardMeshes(snapshot);
     combatFX.setCheckIndicator(snapshot.checkedKingSquare, snapshot.isCheckmate);
+    syncCheckedAndAudioState(snapshot);
     hud.updateFromSnapshot(snapshot, settings, aiThinking);
     syncDomTelemetry(snapshot);
 
@@ -693,12 +821,22 @@ function bootstrap(): void {
     }
   }
 
+  window.addEventListener(
+    'pointerdown',
+    () => {
+      soundFX.unlock();
+      musicEngine.unlock();
+    },
+    { passive: true },
+  );
+
   // Capture-phase pointerdown on #canvas-root intercepts friendly piece clicks/drags
   // BEFORE OrbitControls on the canvas can enter camera-rotation state.
   canvasRoot.addEventListener(
     'pointerdown',
     (e: PointerEvent) => {
       soundFX.unlock();
+      musicEngine.unlock();
       if (e.target !== canvas || e.button !== 0 || activePointer !== null) {
         return;
       }
@@ -761,10 +899,12 @@ function bootstrap(): void {
               ? snap.pieces.find((p) => p.id === hover.pieceId)
               : snap.pieces.find((p) => p.square === hover.square);
           if (bp && bp.color === snap.turn) {
+            animator.setHoveredPiece(bp.id);
             canvas.style.cursor = 'grab';
             return;
           }
         }
+        animator.setHoveredPiece(null);
         if (
           selectedSquare &&
           hover &&
@@ -774,8 +914,11 @@ function bootstrap(): void {
           return;
         }
         canvas.style.cursor = '';
-      } else if (canvas.style.cursor !== '') {
-        canvas.style.cursor = '';
+      } else {
+        animator.setHoveredPiece(null);
+        if (canvas.style.cursor !== '') {
+          canvas.style.cursor = '';
+        }
       }
       return;
     }
@@ -794,6 +937,7 @@ function bootstrap(): void {
     );
     if (!activePointer.isDraggingPiece && dist > DRAG_THRESHOLD_PX) {
       activePointer.isDraggingPiece = true;
+      animator.setDraggingPiece(activePointer.dragPiece.id);
     }
 
     if (activePointer.isDraggingPiece && setRaycasterFromClient(e.clientX, e.clientY)) {
@@ -820,6 +964,7 @@ function bootstrap(): void {
 
     const state = activePointer;
     activePointer = null;
+    animator.setDraggingPiece(null);
     canvas.style.cursor = '';
 
     if (cancelled) {
@@ -879,6 +1024,8 @@ function bootstrap(): void {
   });
 
   window.addEventListener('blur', () => {
+    animator.setDraggingPiece(null);
+    animator.setHoveredPiece(null);
     if (activePointer?.dragPiece && activePointer.dragFromSquare) {
       animator.placeAtSquare(activePointer.dragPiece, activePointer.dragFromSquare);
     }
@@ -887,16 +1034,26 @@ function bootstrap(): void {
   });
 
   // Initial board setup & loading progress
-  const initialSnapshot = controller.getSnapshot();
-  syncBoardMeshes(initialSnapshot, true);
-  combatFX.setCheckIndicator(
-    initialSnapshot.checkedKingSquare,
-    initialSnapshot.isCheckmate,
-  );
-  cathedral.setCameraPreset(settings.cameraPreset, settings.playerColor, true);
-  hud.updateFromSnapshot(initialSnapshot, settings, aiThinking);
-  syncDomTelemetry(initialSnapshot);
-  hud.setLoadingProgress(100, 'Sanctum Ready');
+  try {
+    const initialSnapshot = controller.getSnapshot();
+    syncBoardMeshes(initialSnapshot, true);
+    combatFX.setCheckIndicator(
+      initialSnapshot.checkedKingSquare,
+      initialSnapshot.isCheckmate,
+    );
+    syncCheckedAndAudioState(initialSnapshot);
+    cathedral.setCameraPreset(settings.cameraPreset, settings.playerColor, true);
+    hud.updateFromSnapshot(initialSnapshot, settings, aiThinking);
+    syncDomTelemetry(initialSnapshot);
+  } catch (err) {
+    console.error('[WizardChess] Initial board setup error:', err);
+  } finally {
+    hud.setLoadingProgress(100, 'Sanctum Ready');
+    // Brief transition after 100% progress so the loading bar completes smoothly before fading out
+    window.setTimeout(() => {
+      hud.hideLoading();
+    }, 160);
+  }
 
   window.__WIZARD_CHESS__ = {
     getState: () => ({
@@ -906,6 +1063,7 @@ function bootstrap(): void {
       activeDebrisCount: combatFX.getActiveDebrisCount(),
       isAnimating,
       aiThinking,
+      usingBlenderModels: pieceFactory.isUsingBlenderModels(settings.theme),
     }),
     playMove: async (from: Square, to: Square, promotion?: PieceType) => {
       if (isAnimating || aiThinking) return false;
@@ -921,6 +1079,7 @@ function bootstrap(): void {
       }
       hud.updateFromSnapshot(controller.getSnapshot(), settings, aiThinking);
     },
+    setTheme: (theme: ThemeId) => applyThemeInternal(theme),
   };
 
   // Start render & simulation loop
@@ -935,7 +1094,7 @@ function bootstrap(): void {
 
     cathedral.update(dt, elapsed);
     combatFX.update(dt);
-    animator.updateIdle(piecesMap.values(), elapsed);
+    animator.updateIdle(piecesMap.values(), elapsed, dt);
     cathedral.render();
 
     const debrisCount = combatFX.getActiveDebrisCount();
@@ -947,11 +1106,6 @@ function bootstrap(): void {
 
   cathedral.render();
   requestAnimationFrame(animate);
-
-  // Brief transition after 100% progress so the loading bar completes smoothly before fading out
-  window.setTimeout(() => {
-    hud.hideLoading();
-  }, 160);
 }
 
-bootstrap();
+void bootstrap();
