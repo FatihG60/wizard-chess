@@ -5,11 +5,11 @@
 ![chess.js](https://img.shields.io/badge/chess.js-1.4.0-1e293b?style=flat-square)
 ![Blender GLB](https://img.shields.io/badge/Blender_5.3-5_Sculpted_Armies_(10_GLBs)-1e293b?style=flat-square&logo=blender&logoColor=ea7600)
 ![Vite](https://img.shields.io/badge/Vite-8.3-1e293b?style=flat-square&logo=vite&logoColor=ffd62e)
-![Vitest](https://img.shields.io/badge/Vitest-17%2F17_Passing-14532d?style=flat-square&logo=vitest&logoColor=white)
+![Vitest](https://img.shields.io/badge/Vitest-18%2F18_Passing-14532d?style=flat-square&logo=vitest&logoColor=white)
 
-An interactive 3D Wizard's Chess web game featuring **6 playable 3D realms**, **5 Blender 5.3 sculpted `.glb` army sets (10 files — led by the collector-grade Sovereign Reliquary sculpts)** with procedural Three.js PBR fallback, an in-game **3D Piece Sculpt** hot-swapper, **Voronoi piece-shattering combat physics**, **adaptive realm music & Web Audio SFX**, and a **non-blocking Alpha-Beta + Quiescence chess AI**.
+An interactive 3D Wizard's Chess web game featuring **6 playable 3D realms**, **5 Blender 5.3 sculpted `.glb` army sets (10 files — led by the organic high-poly Sovereign Reliquary v2 sculpts)** with procedural Three.js PBR fallback, **real-time planar marble reflections**, **selective HDR Bloom & Battle-Focus Bokeh**, **3D Reliquary Trophy Ledges**, **true piece dismemberment + scorch craters**, an in-game **3D Piece Sculpt** hot-swapper, **adaptive realm music & Web Audio SFX**, and a **non-blocking Alpha-Beta + Quiescence chess AI**.
 
-*(TR)* **6 oynanabilir 3D diyar**, basrolde yuksek detayli **Sovereign Reliquary** setinin yer aldigi **5 farkli Blender 5.3 `.glb` satranc ordusu (10 dosya)** ve oyun ici **3D Piece Sculpt** degistiricisi, **Voronoi tas parcalama fizigi**, **diyarlara ozel adaptif muzik + Web Audio ses efektleri** ve **Alpha-Beta + Quiescence yapay zekasi** ile gelistirilen etkilesimli 3D Wizard's Chess oyunu.
+*(TR)* **6 oynanabilir 3D diyar**, basrolde organik detayli **Sovereign Reliquary v2** setinin yer aldigi **5 farkli Blender 5.3 `.glb` satranc ordusu (10 dosya)** ve oyun ici **3D Piece Sculpt** degistiricisi, **gercek zamanli mermer tahta yansimalari**, **secici HDR Bloom ve Savaş Kamerası Bokeh derinligi**, **tahta kenari 3D esir rolikeri**, **gercek tas parcasi savrulmali Voronoi kirilma + soğuyan yanık kraterleri**, **adaptif muzik + Web Audio SFX** ve **Alpha-Beta + Quiescence yapay zekasi** ile gelistirilen etkilesimli 3D Wizard's Chess oyunu.
 
 ![Gothic Sanctum — Sovereign Reliquary 3D Wizard's Chess](docs/screenshots/01-gothic-sanctum.png)
 
@@ -103,8 +103,9 @@ Every realm transforms the architectural columns, stained-glass moonlight beams,
 
 ## Core Features / Temel Ozellikler
 
-- **Blender GLB Armies + 3D Sculpt Hot-Swap + Procedural Fallback (`PieceFactory.ts`)**: Loads 5 articulated `.glb` army packs (`10` models in `public/models/*.glb`) generated via headless Blender 5.3 scripts (`Piece_<type>` / `Pivot_Body` / `Pivot_Head` / `Pivot_WeaponArm` / `Pivot_ShieldArm`), including the multi-material **Sovereign Reliquary** set (`build_sovereign_pieces.py`) with dynamic realm overrides for stone, metal trim, velvet cloaks, and emissive arcane gems. Falls back seamlessly to sculpted Three.js `LatheGeometry` / `ExtrudeGeometry` / `TubeGeometry` rigs when offline.
-- **Wizard's Chess Combat Choreography & Shatter Physics (`PieceAnimator.ts`, `CombatFX.ts`)**: Per-archetype attack swings, knight arched leaps, dynamic Battle Camera swoops, camera shake, 24+ Voronoi stone/obsidian/ivory/gold debris shards with floor bounce, billowing smoke clouds, and defeated King bow animations on checkmate.
+- **Blender GLB Armies + 3D Sculpt Hot-Swap + Procedural Fallback (`PieceFactory.ts`)**: Loads 5 articulated `.glb` army packs (`10` models in `public/models/*.glb`) generated via headless Blender 5.3 scripts (`Piece_<type>` / `Pivot_Body` / `Pivot_Head` / `Pivot_WeaponArm` / `Pivot_ShieldArm`), led by the **Sovereign Reliquary v2** sculpts (`build_sovereign_pieces.py`) featuring subdivision-smoothed visages, flowing 7-lock golden manes, double-subsurf draped cloaks, and dynamic realm overrides for stone, metal trim, velvet, and HDR emissive gems. Falls back seamlessly to procedural Three.js PBR rigs offline.
+- **Planar Marble Reflections, Selective HDR Bloom & Battle-Focus Bokeh (`CathedralScene.ts`)**: Renders real-time linear-HDR board reflections (`Reflector` + `MarbleReflectorShader`) tuned for crisp dark-tile reflections without glare, selective `UnrealBloomPass` + `OutputPass` ACES filmic tone mapping on gems/runes/braziers/VFX, `Cinzel` gold-inlaid `A–H / 1–8` bezel coordinates, dual 15-socket **Reliquary Trophy Ledges** for 3D captured pieces, and smooth radial Battle-Focus bokeh on combat swoops.
+- **Wizard's Chess Combat Choreography, Dismemberment & Shatter Physics (`PieceAnimator.ts`, `CombatFX.ts`)**: Per-archetype attack swings, knight arched leaps, camera shake, true dismemberment of captured piece sub-meshes alongside angular Voronoi stone/gold chunks and HDR gem sparks, cooling **Arcane Scorch Crater** decals at impact squares, volumetric smoke clouds, and defeated King bow animations on checkmate.
 - **FIDE Chess Engine & Async Alpha-Beta AI (`ChessController.ts`, `ChessAI.ts`)**: Complete `chess.js` rule enforcement (castling, en passant, promotion, check/checkmate, stalemate, threefold repetition, undo with persistent 3D piece IDs) paired with an asynchronous Alpha-Beta AI (`Novice`, `Adept`, `Grandmaster`) featuring transposition tables, MVV-LVA move ordering, tapered Piece-Square Tables, and quiescence capture search.
 - **Adaptive Music & Procedural Acoustics (`MusicEngine.ts`, `SoundFX.ts`)**: Supports both the extracted reference soundtrack (`public/audio/gothic_video_ost.mp3`) and 6 procedural Web Audio realm scores + ambient environments (`fire`, `wind-chimes`, `desert`, `blizzard`, `forge`, `cosmos`) that raise tension during Check, alongside zero-asset Web Audio stone/steel/brass SFX.
 - **Glassmorphic Sanctum HUD (`HudOverlay.ts`, `styles.css`)**: Crisp `Cinzel` + `Inter` obsidian UI with inline SVG vector iconography, quick top-right Realm cycle & camera toggles, Sanctum Lobby with tactical FEN presets (`Standard Position`, `Scholar's Mate in 1`), direct algebraic/coordinate Move Command (`e4`, `Qxf7#`, `e2e4`), Pawn Promotion picker, and Judgment modal.
@@ -147,10 +148,10 @@ wizard-chess/
     ├── engine/
     │   ├── ChessController.ts           # chess.js wrapper, persistent piece IDs, castling/EP/promotion & undo
     │   ├── ChessAI.ts                   # Non-blocking Alpha-Beta + Quiescence AI across 3 difficulty levels
-    │   └── engine.test.ts               # Vitest unit test suite (17 tests covering rules, undo & AI)
+    │   └── engine.test.ts               # Vitest unit test suite (18 tests covering rules, captures, undo & AI)
     ├── scene/
-    │   ├── CathedralScene.ts            # Multi-realm 3D Sanctum architecture, PMREM RoomEnvironment IBL & OrbitControls
-    │   └── CombatFX.ts                  # Move highlights, check halo, Voronoi piece shatter & smoke particles
+    │   ├── CathedralScene.ts            # Multi-realm 3D Sanctum, planar marble Reflector, HDR Bloom, Bokeh & trophy ledges
+    │   └── CombatFX.ts                  # Move highlights, check halo, piece dismemberment, scorch craters & Voronoi shatter
     ├── pieces/
     │   ├── PieceFactory.ts              # GLTFLoader army loader + procedural 2K PBR sculpted fallback rigs
     │   └── PieceAnimator.ts             # Stone glide, knight leap, per-archetype attack swings & idle sway

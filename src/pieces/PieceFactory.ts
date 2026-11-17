@@ -486,7 +486,7 @@ export class PieceFactory {
         cloned.color.setHex(gemHex);
         if ('emissive' in cloned && cloned.emissive) {
           cloned.emissive.setHex(gemHex);
-          cloned.emissiveIntensity = 1.9;
+          cloned.emissiveIntensity = 3.4;
         }
       } else if (mName.includes('velvet')) {
         cloned.map = null;

@@ -119,6 +119,15 @@ async function bootstrap(): Promise<void> {
   let lastDebrisCount = -1;
 
   const piecesMap = new Map<string, ArticulatedPiece>();
+  const capturedPiecesMap = new Map<string, ArticulatedPiece>();
+  const TROPHY_SORT_WEIGHT: Record<PieceType, number> = {
+    q: 0,
+    r: 1,
+    b: 2,
+    n: 3,
+    p: 4,
+    k: 5,
+  };
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   const boardPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -229,6 +238,40 @@ async function bootstrap(): Promise<void> {
         hud.setLoadingProgress(pct, 'Deploying Ivory & Obsidian Legions...');
       }
     });
+
+    syncCapturedTrophies(snapshot);
+  }
+
+  function syncCapturedTrophies(snapshot: GameSnapshot): void {
+    for (const trophy of capturedPiecesMap.values()) {
+      cathedral.scene.remove(trophy.root);
+    }
+    capturedPiecesMap.clear();
+
+    const deploySide = (capColor: 'w' | 'b', list: PieceType[]) => {
+      const sorted = [...list].sort(
+        (a, b) => TROPHY_SORT_WEIGHT[a] - TROPHY_SORT_WEIGHT[b],
+      );
+      const count = Math.min(15, sorted.length);
+      for (let idx = 0; idx < count; idx++) {
+        const type = sorted[idx];
+        const slot = cathedral.getCapturedSlotWorld(capColor, idx);
+        const key = `trophy:${capColor}:${idx}:${type}`;
+        const trophy = pieceFactory.createPiece(key, type, capColor, settings.theme);
+        trophy.root.traverse((obj) => {
+          delete obj.userData.pieceId;
+        });
+        trophy.root.scale.setScalar(0.46);
+        trophy.root.position.set(slot.x, slot.y, slot.z);
+        trophy.root.rotation.set(0, slot.rotY, 0);
+        trophy.body.rotation.x = 0.08;
+        cathedral.scene.add(trophy.root);
+        capturedPiecesMap.set(key, trophy);
+      }
+    };
+
+    deploySide('w', snapshot.capturedPieces.white);
+    deploySide('b', snapshot.capturedPieces.black);
   }
 
   function selectSquare(square: Square): void {
@@ -379,8 +422,8 @@ async function bootstrap(): Promise<void> {
           result.to,
           capturedSq,
           () => {
+            combatFX.shatterPiece(targetWorld, victim.color, attackerWorld, victim);
             victim.root.visible = false;
-            combatFX.shatterPiece(targetWorld, victim.color, attackerWorld);
             cathedral.triggerCameraShake(0.14, 280);
             soundFX.playCapture();
           },
@@ -392,6 +435,7 @@ async function bootstrap(): Promise<void> {
 
         cathedral.scene.remove(victim.root);
         piecesMap.delete(victim.id);
+        syncCapturedTrophies(snapshot);
         syncDomTelemetry(snapshot);
 
         if (settings.battleCam) {

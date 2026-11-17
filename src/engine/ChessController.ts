@@ -2,7 +2,9 @@ import { Chess, type Move, type Square as ChessSquare } from 'chess.js';
 import type {
   BoardPiece,
   CapturedCounts,
+  CapturedPiecesList,
   GameSnapshot,
+  LastMoveInfo,
   LegalMoveOption,
   MoveExecutionResult,
   PieceColor,
@@ -11,6 +13,14 @@ import type {
 } from '../types';
 
 const SQUARE_PATTERN = /^[a-h][1-8]$/;
+const PIECE_ORDER: readonly Exclude<PieceType, 'k'>[] = ['q', 'r', 'b', 'n', 'p'];
+const STANDARD_ARMY_COUNTS: Record<Exclude<PieceType, 'k'>, number> = {
+  q: 1,
+  r: 2,
+  b: 2,
+  n: 2,
+  p: 8,
+};
 
 const CASTLE_ROOK_MOVES: Record<string, { from: Square; to: Square }> = {
   'e1->g1': { from: 'h1', to: 'f1' },
@@ -27,10 +37,12 @@ export class ChessController {
   private chess: Chess;
   private squareToId: Map<Square, string> = new Map();
   private idSnapshots: Map<Square, string>[] = [];
+  private initialDeficit: CapturedPiecesList = { white: [], black: [] };
   private generation = 1;
 
   constructor(initialFen?: string) {
     this.chess = initialFen ? new Chess(initialFen) : new Chess();
+    this.initialDeficit = this.computeInitialDeficit();
     this.initializePieceIds();
   }
 
@@ -38,6 +50,7 @@ export class ChessController {
     this.chess = fen ? new Chess(fen) : new Chess();
     this.generation += 1;
     this.idSnapshots = [];
+    this.initialDeficit = this.computeInitialDeficit();
     this.initializePieceIds();
     return this.getSnapshot();
   }
@@ -65,6 +78,17 @@ export class ChessController {
       winner = 'draw';
     }
 
+    const verboseHistory = this.chess.history({ verbose: true });
+    const lastEntry = verboseHistory.length > 0 ? verboseHistory[verboseHistory.length - 1] : null;
+    const lastMove: LastMoveInfo | null = lastEntry
+      ? {
+          from: lastEntry.from,
+          to: lastEntry.to,
+          color: lastEntry.color as PieceColor,
+          isCapture: Boolean(lastEntry.captured),
+        }
+      : null;
+
     return {
       fen: this.chess.fen(),
       turn,
@@ -78,6 +102,8 @@ export class ChessController {
       pieces: this.collectBoardPieces(),
       moveHistory: this.chess.history(),
       captured: this.computeCapturedCounts(),
+      capturedPieces: this.computeCapturedPieces(verboseHistory),
+      lastMove,
     };
   }
 
@@ -249,6 +275,43 @@ export class ChessController {
       }
     }
     return pieces;
+  }
+
+  private computeInitialDeficit(): CapturedPiecesList {
+    const present: Record<PieceColor, Record<Exclude<PieceType, 'k'>, number>> = {
+      w: { q: 0, r: 0, b: 0, n: 0, p: 0 },
+      b: { q: 0, r: 0, b: 0, n: 0, p: 0 },
+    };
+    for (const row of this.chess.board()) {
+      for (const cell of row) {
+        if (!cell || cell.type === 'k') continue;
+        present[cell.color][cell.type] += 1;
+      }
+    }
+    const white: PieceType[] = [];
+    const black: PieceType[] = [];
+    for (const pieceType of PIECE_ORDER) {
+      const missingW = Math.max(0, STANDARD_ARMY_COUNTS[pieceType] - present.w[pieceType]);
+      const missingB = Math.max(0, STANDARD_ARMY_COUNTS[pieceType] - present.b[pieceType]);
+      for (let i = 0; i < missingW; i++) white.push(pieceType);
+      for (let i = 0; i < missingB; i++) black.push(pieceType);
+    }
+    return { white, black };
+  }
+
+  private computeCapturedPieces(verboseHistory: Move[]): CapturedPiecesList {
+    const white = [...this.initialDeficit.white];
+    const black = [...this.initialDeficit.black];
+    for (const move of verboseHistory) {
+      if (!move.captured) continue;
+      const capType = move.captured as PieceType;
+      if (move.color === 'w') {
+        black.push(capType);
+      } else {
+        white.push(capType);
+      }
+    }
+    return { white, black };
   }
 
   private computeCapturedCounts(): CapturedCounts {

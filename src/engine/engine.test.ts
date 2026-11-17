@@ -289,6 +289,47 @@ describe('ChessController', () => {
     expect(controller.undoMove()).toBeNull();
   });
 
+  it('tracks capturedPieces and lastMove across captures, undoMove, and custom FEN reset', () => {
+    const controller = new ChessController();
+    expect(controller.getSnapshot().lastMove).toBeNull();
+    expect(controller.getSnapshot().capturedPieces).toEqual({ white: [], black: [] });
+
+    controller.makeMove('e2', 'e4');
+    expect(controller.getSnapshot().lastMove).toEqual({
+      from: 'e2',
+      to: 'e4',
+      color: 'w',
+      isCapture: false,
+    });
+
+    controller.makeMove('d7', 'd5');
+    controller.makeMove('e4', 'd5');
+    const afterCap = controller.getSnapshot();
+    expect(afterCap.lastMove).toEqual({
+      from: 'e4',
+      to: 'd5',
+      color: 'w',
+      isCapture: true,
+    });
+    expect(afterCap.capturedPieces).toEqual({ white: [], black: ['p'] });
+
+    const undone = controller.undoMove();
+    expect(undone?.capturedPieces).toEqual({ white: [], black: [] });
+    expect(undone?.lastMove).toEqual({
+      from: 'd7',
+      to: 'd5',
+      color: 'b',
+      isCapture: false,
+    });
+
+    // Custom midgame FEN knows starting army deficits beyond active board pieces
+    const customSnap = controller.reset('4k3/8/8/3q4/8/2N5/8/4K3 w - - 0 1');
+    expect(customSnap.lastMove).toBeNull();
+    expect(customSnap.capturedPieces.white).toContain('q');
+    expect(customSnap.capturedPieces.black).not.toContain('q');
+    expect(customSnap.capturedPieces.black).toContain('n');
+  });
+
   it('generates new piece generation IDs on reset', () => {
     const controller = new ChessController();
     const firstId = controller.getSnapshot().pieces.find((p) => p.square === 'e2')?.id;

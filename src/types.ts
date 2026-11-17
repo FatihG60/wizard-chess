@@ -73,6 +73,18 @@ export interface CapturedCounts {
   blackCapturedByWhite: number;
 }
 
+export interface CapturedPiecesList {
+  white: PieceType[];
+  black: PieceType[];
+}
+
+export interface LastMoveInfo {
+  from: Square;
+  to: Square;
+  color: PieceColor;
+  isCapture: boolean;
+}
+
 export interface GameSnapshot {
   fen: string;
   turn: PieceColor;
@@ -86,6 +98,8 @@ export interface GameSnapshot {
   pieces: BoardPiece[];
   moveHistory: string[];
   captured: CapturedCounts;
+  capturedPieces: CapturedPiecesList;
+  lastMove: LastMoveInfo | null;
 }
 
 export interface ArticulatedPiece {

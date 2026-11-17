@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { THEMES, type ParticleMode, type ThemeConfig } from '../themes';
 import {
@@ -134,6 +140,124 @@ const ELDER_FUTHARK_STROKES: ReadonlyArray<ReadonlyArray<readonly [number, numbe
 ];
 
 /**
+ * Custom linear-HDR Reflector shader blended subtly over the 64 satin marble squares.
+ * Omits tone-mapping & sRGB fragments because EffectComposer + OutputPass applies them once at the end.
+ */
+const MarbleReflectorShader = {
+  name: 'MarbleReflectorShader',
+  uniforms: {
+    color: { value: null },
+    tDiffuse: { value: null },
+    textureMatrix: { value: null },
+    uOpacityScale: { value: 1.0 },
+  },
+  vertexShader: /* glsl */ `
+    uniform mat4 textureMatrix;
+    varying vec4 vUv;
+    varying vec2 vBoardUv;
+    varying vec3 vWorldPos;
+
+    void main() {
+      vUv = textureMatrix * vec4(position, 1.0);
+      vBoardUv = uv;
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform vec3 color;
+    uniform sampler2D tDiffuse;
+    uniform float uOpacityScale;
+    varying vec4 vUv;
+    varying vec2 vBoardUv;
+    varying vec3 vWorldPos;
+
+    void main() {
+      float off = 0.0020 * vUv.w;
+      vec3 refl = texture2DProj(tDiffuse, vUv).rgb * 0.44;
+      refl += texture2DProj(tDiffuse, vUv + vec4( off,  off, 0.0, 0.0)).rgb * 0.14;
+      refl += texture2DProj(tDiffuse, vUv + vec4(-off,  off, 0.0, 0.0)).rgb * 0.14;
+      refl += texture2DProj(tDiffuse, vUv + vec4( off, -off, 0.0, 0.0)).rgb * 0.14;
+      refl += texture2DProj(tDiffuse, vUv + vec4(-off, -off, 0.0, 0.0)).rgb * 0.14;
+      refl = min(refl * color, vec3(1.25));
+
+      float reflLuma = dot(refl, vec3(0.2126, 0.7152, 0.0722));
+      float pieceMask = smoothstep(0.065, 0.30, reflLuma);
+
+      float parity = mod(
+        floor(clamp(vBoardUv.x, 0.0, 0.9999) * 8.0) + floor(clamp(vBoardUv.y, 0.0, 0.9999) * 8.0),
+        2.0
+      );
+      float baseAlpha = mix(0.30, 0.065, parity) * pieceMask;
+
+      vec3 viewDir = normalize(cameraPosition - vWorldPos);
+      float fresnel = pow(1.0 - clamp(dot(viewDir, vec3(0.0, 1.0, 0.0)), 0.0, 1.0), 2.1);
+      float alpha = clamp((baseAlpha + fresnel * 0.12 * pieceMask) * uOpacityScale, 0.0, 0.38);
+
+      gl_FragColor = vec4(refl, alpha);
+    }
+  `,
+};
+
+/**
+ * Screen-space radial bokeh focus pass activated smoothly during Battle Camera swoops,
+ * preserving transparent moonlight cones, dust motes, and additive combat VFX without depth-override artifacts.
+ */
+const BattleFocusShader = {
+  name: 'BattleFocusShader',
+  uniforms: {
+    tDiffuse: { value: null },
+    uFocusCenter: { value: new THREE.Vector2(0.5, 0.5) },
+    uFocusStrength: { value: 0.0 },
+    uAspect: { value: 16 / 9 },
+    uVignette: { value: 0.10 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uFocusCenter;
+    uniform float uFocusStrength;
+    uniform float uAspect;
+    uniform float uVignette;
+    varying vec2 vUv;
+
+    void main() {
+      vec4 base = texture2D(tDiffuse, vUv);
+      vec2 delta = (vUv - uFocusCenter) * vec2(uAspect, 1.0);
+      float dist = length(delta);
+
+      vec3 col = base.rgb;
+      if (uFocusStrength > 0.002) {
+        float blurAmt = smoothstep(0.24, 0.68, dist) * uFocusStrength;
+        if (blurAmt > 0.001) {
+          float rad = blurAmt * 0.0068;
+          vec3 accum = col;
+          for (int i = 0; i < 12; i++) {
+            float fi = float(i);
+            float ang = fi * 2.3999632;
+            float r = sqrt((fi + 0.5) / 12.0) * rad;
+            vec2 o = vec2(cos(ang) / max(0.5, uAspect), sin(ang)) * r;
+            accum += texture2D(tDiffuse, clamp(vUv + o, vec2(0.001), vec2(0.999))).rgb;
+          }
+          col = accum / 13.0;
+        }
+      }
+
+      vec2 centered = vUv - vec2(0.5);
+      float vigDist = dot(centered, centered);
+      float vigFactor = 1.0 - smoothstep(0.18, 0.72, vigDist) * (uVignette + uFocusStrength * 0.12);
+      gl_FragColor = vec4(col * clamp(vigFactor, 0.65, 1.0), base.a);
+    }
+  `,
+};
+
+/**
  * Full 3D Gothic Cathedral "Sanctum" environment, chessboard, lighting, IBL,
  * camera rig, and atmospheric effects for Wizard Chess.
  */
@@ -169,6 +293,9 @@ export class CathedralScene {
   private darkSquareMat!: THREE.MeshStandardMaterial;
   private mortarMat!: THREE.MeshStandardMaterial;
   private goldBezelMat!: THREE.MeshStandardMaterial;
+  private coordDecalMat!: THREE.MeshStandardMaterial;
+  private trophyRailMat!: THREE.MeshStandardMaterial;
+  private trophySocketMat!: THREE.MeshStandardMaterial;
   private obsidianTopMat!: THREE.MeshStandardMaterial;
   private obsidianSideMat!: THREE.MeshStandardMaterial;
   private daisMat!: THREE.MeshStandardMaterial;
@@ -203,6 +330,17 @@ export class CathedralScene {
   private shakeIntensity = 0;
   private readonly lastShakeOffset = new THREE.Vector3();
 
+  private composer!: EffectComposer;
+  private renderPass!: RenderPass;
+  private bloomPass!: UnrealBloomPass;
+  private battleFocusPass!: ShaderPass;
+  private outputPass!: OutputPass;
+  private boardReflector!: Reflector;
+  private battleFocusTarget = false;
+  private battleFocusStrength = 0;
+  private readonly battleFocusWorld = new THREE.Vector3(0, 0.6, 0);
+  private readonly focusProjTmp = new THREE.Vector3();
+
   private resizeObserver: ResizeObserver | null = null;
   private readonly onWindowResizeBound: () => void;
   private disposed = false;
@@ -228,7 +366,7 @@ export class CathedralScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(width, height);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMappingExposure = 1.04;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -236,6 +374,30 @@ export class CathedralScene {
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
     container.appendChild(this.renderer.domElement);
+
+    // Post-processing pipeline: Render -> Selective HDR Bloom -> Battle-Focus Bokeh -> ACES/sRGB Output
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.composer.setSize(width, height);
+
+    this.renderPass = new RenderPass(this.scene, this.camera);
+    this.composer.addPass(this.renderPass);
+
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(width, height),
+      0.22,
+      0.36,
+      2.45
+    );
+    (this.bloomPass.highPassUniforms as Record<string, THREE.IUniform>)['smoothWidth'].value = 0.35;
+    this.composer.addPass(this.bloomPass);
+
+    this.battleFocusPass = new ShaderPass(BattleFocusShader);
+    this.battleFocusPass.uniforms['uAspect'].value = width / Math.max(1, height);
+    this.composer.addPass(this.battleFocusPass);
+
+    this.outputPass = new OutputPass();
+    this.composer.addPass(this.outputPass);
 
     // IBL setup so gold trim, obsidian, and ivory gleam naturally
     this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
@@ -311,7 +473,13 @@ export class CathedralScene {
 
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    const pr = Math.min(window.devicePixelRatio || 1, 2);
+    this.renderer.setPixelRatio(pr);
     this.renderer.setSize(width, height);
+    this.composer.setPixelRatio(pr);
+    this.composer.setSize(width, height);
+    this.bloomPass.resolution.set(width, height);
+    this.battleFocusPass.uniforms['uAspect'].value = width / Math.max(1, height);
 
     if (sizeChanged && !this.transition) {
       this.setCameraPreset(this.currentPreset, this.currentPlayerColor, true);
@@ -357,6 +525,7 @@ export class CathedralScene {
   setCameraPreset(preset: CameraPreset, playerColor: PieceColor, immediate = false): void {
     this.clearActiveShakeOffset();
     this.resolvePendingTransition();
+    this.battleFocusTarget = false;
 
     this.currentPreset = preset;
     this.currentPlayerColor = playerColor;
@@ -428,6 +597,8 @@ export class CathedralScene {
       THREE.MathUtils.clamp(midZ + dirZ * 3.85, -8.5, 8.5)
     );
     const endTarget = new THREE.Vector3(midX, 0.72, midZ);
+    this.battleFocusTarget = true;
+    this.battleFocusWorld.copy(endTarget);
 
     this.controls.enabled = false;
     return new Promise<void>((resolve) => {
@@ -446,6 +617,7 @@ export class CathedralScene {
   restoreCamera(preset: CameraPreset, playerColor: PieceColor): Promise<void> {
     this.clearActiveShakeOffset();
     this.resolvePendingTransition();
+    this.battleFocusTarget = false;
 
     this.currentPreset = preset;
     this.currentPlayerColor = playerColor;
@@ -539,6 +711,22 @@ export class CathedralScene {
       const mat = this.moonlightBeams[i].material as THREE.MeshBasicMaterial;
       mat.opacity = beamBase + Math.sin(elapsed * 0.45 + i * 1.1) * 0.01;
     }
+
+    // Smoothly ramp cinematic Battle Camera bokeh focus around combat impact point
+    const targetStrength = this.battleFocusTarget ? 1.0 : 0.0;
+    const focusBlend = 1 - Math.exp(-clampedDt * 8.5);
+    this.battleFocusStrength += (targetStrength - this.battleFocusStrength) * focusBlend;
+    if (this.battleFocusStrength < 0.002 && !this.battleFocusTarget) {
+      this.battleFocusStrength = 0;
+    }
+    this.battleFocusPass.uniforms['uFocusStrength'].value = this.battleFocusStrength;
+    if (this.battleFocusStrength > 0.002) {
+      this.focusProjTmp.copy(this.battleFocusWorld).project(this.camera);
+      this.battleFocusPass.uniforms['uFocusCenter'].value.set(
+        THREE.MathUtils.clamp(this.focusProjTmp.x * 0.5 + 0.5, 0.15, 0.85),
+        THREE.MathUtils.clamp(this.focusProjTmp.y * 0.5 + 0.5, 0.15, 0.85)
+      );
+    }
   }
 
   public setTheme(themeId: ThemeId): void {
@@ -582,11 +770,15 @@ export class CathedralScene {
     this.obsidianTopMat.bumpMap = tex.borderBump;
     this.obsidianTopMat.emissiveMap = tex.borderEmissive;
     this.obsidianTopMat.emissive.setHex(bd.runeEmissiveHex);
-    this.obsidianTopMat.emissiveIntensity = bd.runeEmissiveIntensity;
+    this.obsidianTopMat.emissiveIntensity = bd.runeEmissiveIntensity * 4.8;
     this.obsidianTopMat.needsUpdate = true;
 
     this.obsidianSideMat.color.setHex(new THREE.Color(bd.borderBaseHex).getHex());
     this.goldBezelMat.color.setHex(bd.bezelHex);
+    this.coordDecalMat.color.setHex(bd.bezelHex);
+    this.coordDecalMat.emissive.setHex(bd.runeEmissiveHex);
+    this.trophyRailMat.color.setHex(bd.daisHex);
+    this.trophySocketMat.color.setHex(bd.bezelHex);
     this.mortarMat.color.setHex(bd.mortarHex);
     this.daisMat.color.setHex(bd.daisHex);
 
@@ -634,11 +826,44 @@ export class CathedralScene {
       this.dustMotes.material.size = cfg.particles.size;
       this.dustMotes.material.opacity = cfg.particles.opacity;
     }
+
+    // Tune selective HDR bloom per realm so snowy realms stay crisp & emitters bloom cleanly above 2.35
+    if (themeId === 'frost') {
+      this.bloomPass.strength = 0.18;
+      this.bloomPass.radius = 0.32;
+      this.bloomPass.threshold = 2.75;
+    } else if (themeId === 'infernal' || themeId === 'astral') {
+      this.bloomPass.strength = 0.26;
+      this.bloomPass.radius = 0.40;
+      this.bloomPass.threshold = 2.35;
+    } else {
+      this.bloomPass.strength = 0.22;
+      this.bloomPass.radius = 0.36;
+      this.bloomPass.threshold = 2.45;
+    }
+  }
+
+  public getCapturedSlotWorld(
+    capturedColor: PieceColor,
+    index: number
+  ): { x: number; y: number; z: number; rotY: number } {
+    const sign = capturedColor === 'w' ? -1 : 1;
+    const clamped = Math.max(0, Math.min(14, index));
+    const col = clamped < 8 ? 0 : 1;
+    const row = col === 0 ? clamped : clamped - 8;
+    const x = sign * (col === 0 ? 4.46 : 4.71);
+    const z = col === 0 ? -3.15 + row * 0.90 : -2.70 + row * 0.90;
+    return {
+      x,
+      y: 0.024,
+      z,
+      rotY: capturedColor === 'w' ? Math.PI * 0.84 : -Math.PI * 0.16,
+    };
   }
 
   render(): void {
     if (this.disposed) return;
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
   }
 
   dispose(): void {
@@ -678,6 +903,11 @@ export class CathedralScene {
 
     this.envRenderTarget.dispose();
     this.pmremGenerator.dispose();
+    this.boardReflector.dispose();
+    this.bloomPass.dispose();
+    this.battleFocusPass.dispose();
+    this.outputPass.dispose();
+    this.composer.dispose();
     this.renderer.dispose();
 
     if (this.renderer.domElement.parentNode === this.container) {
@@ -870,7 +1100,7 @@ export class CathedralScene {
         bumpScale: 0.015,
         emissiveMap: obsidianTextures.emissiveMap,
         emissive: new THREE.Color(0xffc95c),
-        emissiveIntensity: 0.45,
+        emissiveIntensity: 2.65,
         roughness: 0.28,
         metalness: 0.18,
       })
@@ -927,6 +1157,146 @@ export class CathedralScene {
     daisLower.position.set(0, -0.6, 0);
     daisLower.receiveShadow = true;
     boardGroup.add(daisLower);
+
+    this.buildPlanarBoardReflector(boardGroup);
+    this.buildCoordinateDecals(boardGroup, railCenter);
+    this.buildCapturedReliquaryLedges(boardGroup);
+  }
+
+  private buildPlanarBoardReflector(boardGroup: THREE.Group): void {
+    const reflGeo = this.trackGeometry(new THREE.PlaneGeometry(7.98, 7.98));
+    this.boardReflector = new Reflector(reflGeo, {
+      color: 0xf0f3f9,
+      textureWidth: 1024,
+      textureHeight: 1024,
+      clipBias: 0.003,
+      shader: MarbleReflectorShader,
+      multisample: 2,
+    });
+    this.boardReflector.rotation.x = -Math.PI / 2;
+    this.boardReflector.position.set(0, 0.0014, 0);
+    this.boardReflector.renderOrder = 1;
+    const rMat = this.boardReflector.material as THREE.ShaderMaterial;
+    rMat.transparent = true;
+    rMat.depthWrite = false;
+    rMat.polygonOffset = true;
+    rMat.polygonOffsetFactor = -1;
+    boardGroup.add(this.boardReflector);
+  }
+
+  private buildCoordinateDecals(boardGroup: THREE.Group, railCenter: number): void {
+    const atlas = document.createElement('canvas');
+    atlas.width = 512;
+    atlas.height = 256;
+    const ctx = atlas.getContext('2d')!;
+    ctx.clearRect(0, 0, atlas.width, atlas.height);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 84px "Cinzel", Georgia, serif';
+    ctx.fillStyle = '#FFEAB0';
+
+    const files = 'ABCDEFGH';
+    const ranks = '12345678';
+    for (let i = 0; i < 8; i++) {
+      const cx = i * 64 + 32;
+      ctx.fillText(files[i], cx, 64);
+      ctx.fillText(ranks[i], cx, 192);
+    }
+
+    const atlasTex = this.trackTexture(new THREE.CanvasTexture(atlas));
+    atlasTex.colorSpace = THREE.SRGBColorSpace;
+    atlasTex.anisotropy = this.maxAnisotropy();
+
+    this.coordDecalMat = this.trackMaterial(
+      new THREE.MeshStandardMaterial({
+        map: atlasTex,
+        emissiveMap: atlasTex,
+        color: 0xe6c875,
+        emissive: new THREE.Color(0xffca5a),
+        emissiveIntensity: 0.55,
+        transparent: true,
+        opacity: 0.92,
+        roughness: 0.3,
+        metalness: 0.65,
+        depthWrite: false,
+      })
+    );
+
+    const addDecal = (colIdx: number, rowIdx: number, x: number, z: number, rotY: number) => {
+      const geo = this.trackGeometry(new THREE.PlaneGeometry(0.165, 0.165));
+      const u0 = colIdx / 8;
+      const u1 = (colIdx + 1) / 8;
+      const v0 = rowIdx === 0 ? 0.5 : 0.0;
+      const v1 = rowIdx === 0 ? 1.0 : 0.5;
+      const uvAttr = geo.attributes.uv;
+      uvAttr.setXY(0, u0, v1);
+      uvAttr.setXY(1, u1, v1);
+      uvAttr.setXY(2, u0, v0);
+      uvAttr.setXY(3, u1, v0);
+      uvAttr.needsUpdate = true;
+
+      const decal = new THREE.Mesh(geo, this.coordDecalMat);
+      decal.rotation.x = -Math.PI / 2;
+      decal.rotation.z = rotY;
+      decal.position.set(x, 0.046, z);
+      boardGroup.add(decal);
+    };
+
+    for (let i = 0; i < 8; i++) {
+      const coord = i - 3.5;
+      // Files A..H along South (+Z) and North (-Z) rails
+      addDecal(i, 0, coord, railCenter, 0);
+      addDecal(i, 0, coord, -railCenter, Math.PI);
+      // Ranks 1..8 along West (-X) and East (+X) rails
+      const rankZ = 3.5 - i;
+      addDecal(i, 1, -railCenter, rankZ, 0);
+      addDecal(i, 1, railCenter, rankZ, Math.PI);
+    }
+  }
+
+  private buildCapturedReliquaryLedges(boardGroup: THREE.Group): void {
+    this.trophyRailMat = this.trackMaterial(
+      new THREE.MeshStandardMaterial({
+        color: 0x161922,
+        roughness: 0.36,
+        metalness: 0.25,
+      })
+    );
+    this.trophySocketMat = this.trackMaterial(
+      new THREE.MeshStandardMaterial({
+        color: 0xd4af37,
+        roughness: 0.26,
+        metalness: 0.88,
+      })
+    );
+
+    const ledgeGeo = this.trackGeometry(new THREE.BoxGeometry(0.58, 0.044, 7.36));
+    const rimGeo = this.trackGeometry(new THREE.BoxGeometry(0.62, 0.022, 7.42));
+    const socketGeo = this.trackGeometry(new THREE.RingGeometry(0.085, 0.118, 20));
+    socketGeo.rotateX(-Math.PI / 2);
+
+    for (const color of ['w', 'b'] as const) {
+      const sign = color === 'w' ? -1 : 1;
+      const centerX = sign * 4.585;
+
+      const rim = new THREE.Mesh(rimGeo, this.trophySocketMat);
+      rim.position.set(centerX, -0.008, 0);
+      rim.receiveShadow = true;
+      boardGroup.add(rim);
+
+      const ledge = new THREE.Mesh(ledgeGeo, this.trophyRailMat);
+      ledge.position.set(centerX, 0.002, 0);
+      ledge.receiveShadow = true;
+      ledge.castShadow = true;
+      boardGroup.add(ledge);
+
+      for (let idx = 0; idx < 15; idx++) {
+        const slot = this.getCapturedSlotWorld(color, idx);
+        const socket = new THREE.Mesh(socketGeo, this.trophySocketMat);
+        socket.position.set(slot.x, slot.y + 0.001, slot.z);
+        boardGroup.add(socket);
+      }
+    }
   }
 
   private createBeveledTileGeometry(
@@ -1784,7 +2154,7 @@ export class CathedralScene {
         map: stainedGlassTex,
         emissiveMap: stainedGlassTex,
         emissive: new THREE.Color(0x5da0ff),
-        emissiveIntensity: 1.55,
+        emissiveIntensity: 2.6,
         roughness: 0.25,
         metalness: 0.1,
       })

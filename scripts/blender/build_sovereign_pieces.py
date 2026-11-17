@@ -198,7 +198,8 @@ def add_lofted_obj(
             ang = arc_start + t * arc_span
             pleat = 0.0
             if pleat_amp != 0.0 and pleat_count > 0:
-                pleat = pleat_amp * math.cos(pleat_count * t * math.pi * 2.0 if closed_loop else pleat_count * t * math.pi)
+                phase = pleat_count * t * math.pi * (2.0 if closed_loop else 1.0)
+                pleat = pleat_amp * (math.cos(phase) + 0.32 * math.sin(phase * 2.0 + 0.7))
             lx = math.cos(ang) * max(1e-4, rx + pleat + r_offset)
             ly = math.sin(ang) * max(1e-4, ry + pleat + r_offset)
             pts.append(bm.verts.new(c_vec + (rot_m @ Vector((lx, ly, 0.0)))))
@@ -601,6 +602,161 @@ def build_wing_parts(root_pos: Vector, side_sign: float, span: float, height: fl
     return parts
 
 
+def build_sculpted_visage(
+    prefix: str,
+    head_center: Vector,
+    radius: float,
+    pal,
+    with_beard: bool = False,
+    beard_len: float = 0.13,
+):
+    """Sculpts an organic subdivision-smoothed Gothic visage facing -Y (front),
+    with a sleek curved Venetian brow/nasal filigree arch, smooth contoured cheek/jawline,
+    subtle recessed luminous eyes, and an optional sculpted fluted ceremonial beard."""
+    cx, cy, cz = head_center.x, head_center.y, head_center.z
+    face_stations = [
+        ((cx, cy + radius * 0.04, cz - radius * 0.94), radius * 0.56, radius * 0.52, 0.0, 0.0),
+        ((cx, cy - radius * 0.05, cz - radius * 0.36), radius * 0.86, radius * 0.86, 0.0, 0.0),
+        ((cx, cy - radius * 0.03, cz + radius * 0.18), radius * 0.96, radius * 0.94, 0.0, 0.0),
+        ((cx, cy + radius * 0.02, cz + radius * 0.74), radius * 0.92, radius * 0.88, 0.0, 0.0),
+        ((cx, cy + radius * 0.05, cz + radius * 1.04), radius * 0.44, radius * 0.44, 0.0, 0.0),
+    ]
+    parts = [
+        add_lofted_obj(
+            f"{prefix}_cranium",
+            face_stations,
+            segments=26,
+            mat=pal["primary"],
+            closed_loop=True,
+            subsurf_levels=2,
+        ),
+        # Recessed orbital shadow visor cavity + sleek vertical nasal ridge
+        base.add_primitive_obj(
+            f"{prefix}_eye_recess",
+            "cyl",
+            pal["recess"],
+            loc=(cx, cy - radius * 0.24, cz + radius * 0.16),
+            scale=(1.02, 0.86, 1.0),
+            r_bot=radius * 0.78,
+            r_top=radius * 0.78,
+            height=radius * 0.24,
+            segs=20,
+        ),
+        base.add_tube_obj(
+            f"{prefix}_nasal_arch",
+            [
+                (cx, cy - radius * 0.96, cz + radius * 0.34),
+                (cx, cy - radius * 1.02, cz + radius * 0.08),
+                (cx, cy - radius * 0.94, cz - radius * 0.18),
+            ],
+            radius * 0.09,
+            pal["gold"],
+            taper_end=True,
+            resolution=8,
+        ),
+    ]
+    for sx in (-1.0, 1.0):
+        # Smooth sweeping arched golden brow filigree & subtle sapphire/ruby eyes
+        parts.append(
+            base.add_tube_obj(
+                f"{prefix}_brow_curve_{sx}",
+                [
+                    (cx, cy - radius * 0.95, cz + radius * 0.26),
+                    (cx + sx * radius * 0.38, cy - radius * 0.88, cz + radius * 0.34),
+                    (cx + sx * radius * 0.72, cy - radius * 0.56, cz + radius * 0.22),
+                ],
+                radius * 0.068,
+                pal["gold"],
+                taper_end=True,
+                resolution=8,
+            )
+        )
+        parts.append(
+            base.add_tube_obj(
+                f"{prefix}_cheek_filigree_{sx}",
+                [
+                    (cx + sx * radius * 0.22, cy - radius * 0.90, cz - radius * 0.18),
+                    (cx + sx * radius * 0.56, cy - radius * 0.72, cz - radius * 0.06),
+                    (cx + sx * radius * 0.78, cy - radius * 0.38, cz + radius * 0.10),
+                ],
+                radius * 0.055,
+                pal["gold"],
+                taper_end=True,
+                resolution=8,
+            )
+        )
+        parts += add_gem_obj(
+            f"{prefix}_eye_{sx}",
+            (cx + sx * radius * 0.31, cy - radius * 0.89, cz + radius * 0.16),
+            radius * 0.085,
+            pal,
+            rot=(math.pi * 0.5, 0.0, sx * 0.15),
+            stretch_z=0.9,
+            with_bezel=False,
+        )
+
+    if with_beard:
+        beard_pts = [
+            (0.0, cz - radius * 0.20 - beard_len),
+            (radius * 0.16, cz - radius * 0.20 - beard_len * 0.72),
+            (radius * 0.52, cz - radius * 0.20 - beard_len * 0.28),
+            (radius * 0.68, cz - radius * 0.20),
+            (0.0, cz - radius * 0.20),
+        ]
+        parts.append(
+            base.add_lathe_obj(
+                f"{prefix}_beard_fluted",
+                beard_pts,
+                22,
+                pal["secondary"],
+                flute_amp=0.007,
+                flute_count=11,
+                subsurf_levels=1,
+            )
+        )
+        parts.append(
+            base.add_tube_obj(
+                f"{prefix}_beard_lock",
+                [
+                    (cx, cy - radius * 0.84, cz - radius * 0.22),
+                    (cx, cy - radius * 0.90, cz - radius * 0.24 - beard_len * 0.52),
+                    (cx, cy - radius * 0.74, cz - radius * 0.22 - beard_len * 1.02),
+                ],
+                radius * 0.20,
+                pal["secondary"],
+                taper_end=True,
+                resolution=10,
+            )
+        )
+    return parts
+
+
+def build_mane_locks(pal):
+    """Builds a 7-lock wind-swept flowing golden mane along the Warhorse's arched neck."""
+    parts = []
+    anchors = [
+        ((0.0, -0.10, 0.63), (0.0, 0.04, 0.56), (0.0, 0.15, 0.51)),
+        ((0.0, -0.13, 0.70), (0.04, 0.02, 0.66), (0.07, 0.16, 0.60)),
+        ((0.0, -0.15, 0.77), (-0.04, 0.01, 0.74), (-0.07, 0.15, 0.69)),
+        ((0.0, -0.17, 0.84), (0.05, -0.02, 0.83), (0.08, 0.12, 0.78)),
+        ((0.0, -0.20, 0.90), (-0.04, -0.05, 0.91), (-0.07, 0.10, 0.88)),
+        ((0.0, -0.23, 0.95), (0.0, -0.10, 1.01), (0.0, 0.05, 0.98)),
+        ((0.0, -0.29, 0.97), (0.0, -0.20, 1.07), (0.0, -0.08, 1.06)),
+    ]
+    for i, (p0, p1, p2) in enumerate(anchors):
+        parts.append(
+            base.add_tube_obj(
+                f"n_mane_lock_{i}",
+                [p0, p1, p2],
+                0.032 - i * 0.0015,
+                pal["gold"],
+                taper_end=True,
+                resolution=10,
+            )
+        )
+    return parts
+
+
 def build_pleated_cloak(
     name: str,
     top_z: float,
@@ -615,42 +771,44 @@ def build_pleated_cloak(
     pal,
     with_gold_trim: bool = True,
 ):
-    """Sculpts a thick billowing rear cloak covering the back (+Y) hemisphere with deep vertical pleats."""
+    """Sculpts a thick billowing rear cloak covering the back (+Y) hemisphere with deep organic folds."""
     stations = []
-    steps = 6
+    steps = 9
     for i in range(steps):
         t = i / (steps - 1)
         ease = t * t * (3.0 - 2.0 * t)
+        flare = 1.0 + 0.10 * (t ** 2.4)
         z = top_z + (bot_z - top_z) * t
-        rx = top_rx + (bot_rx - top_rx) * ease
-        ry = top_ry + (bot_ry - top_ry) * ease
+        rx = (top_rx + (bot_rx - top_rx) * ease) * flare
+        ry = (top_ry + (bot_ry - top_ry) * ease) * flare
         yc = y_center_top + (y_center_bot - y_center_top) * ease
         stations.append(((0.0, yc, z), rx, ry, 0.0, 0.0))
 
-    # Arc from +15 deg to +165 deg covers rear (+Y) shoulders cleanly without clipping front arms!
+    # Arc from +16 deg to +164 deg covers rear (+Y) shoulders cleanly without clipping front arms!
     parts = [
         add_lofted_obj(
             name,
             stations,
-            segments=28,
+            segments=36,
             mat=pal["velvet"],
             arc_start=math.radians(16.0),
             arc_span=math.radians(148.0),
             closed_loop=False,
-            pleat_amp=0.017,
+            pleat_amp=0.019,
             pleat_count=pleats,
-            thickness=0.024,
-            subsurf_levels=1,
+            thickness=0.025,
+            subsurf_levels=2,
         )
     ]
     if with_gold_trim:
-        # Gold collar clasp & lower hem arch
+        # Gold collar clasp & lower flared hem arch
         hem_pts = []
-        for i in range(13):
-            u = i / 12.0
+        flare_bot = 1.10
+        for i in range(17):
+            u = i / 16.0
             ang = math.radians(18.0 + u * 144.0)
-            hem_pts.append((math.cos(ang) * bot_rx, y_center_bot + math.sin(ang) * bot_ry, bot_z + 0.015))
-        parts.append(base.add_tube_obj(f"{name}_hem_gold", hem_pts, 0.013, pal["gold"], resolution=8))
+            hem_pts.append((math.cos(ang) * bot_rx * flare_bot, y_center_bot + math.sin(ang) * bot_ry * flare_bot, bot_z + 0.015))
+        parts.append(base.add_tube_obj(f"{name}_hem_gold", hem_pts, 0.013, pal["gold"], resolution=10))
     return parts
 
 
@@ -706,13 +864,11 @@ def build_sovereign_pawn(pal) -> bpy.types.Object:
         )
     base.bake_parts_into_joint_mesh("Mesh_Body_p", body_parts, body_pivot_w, pivot_body)
 
-    # Head + Visored Sallet Kettle Helm + Sweeping Bladed Crest
+    # Head + Visored Sallet Kettle Helm + Sweeping Bladed Crest + Sculpted Visage
     head_pivot_w = Vector((0.0, 0.0, 0.67))
     pivot_head = base.make_empty("Pivot_Head_p", head_pivot_w - body_pivot_w, pivot_body)
-    head_parts = [
-        base.add_primitive_obj("p_head_core", "sphere", pal["secondary"], loc=(0.0, 0.0, 0.78), radius=0.108, segs=18),
-        base.add_primitive_obj("p_visor", "box", pal["recess"], loc=(0.0, -0.092, 0.795), size=(0.126, 0.050, 0.036), bevel_width=0.004),
-        base.add_primitive_obj("p_chin", "cyl", pal["primary"], loc=(0.0, 0.0, 0.735), r_bot=0.112, r_top=0.098, height=0.082, segs=16, bevel_width=0.006),
+    head_parts = build_sculpted_visage("p", Vector((0.0, 0.0, 0.77)), 0.104, pal, with_beard=False) + [
+        base.add_primitive_obj("p_chin", "cyl", pal["primary"], loc=(0.0, 0.0, 0.715), r_bot=0.112, r_top=0.098, height=0.072, segs=16, bevel_width=0.006),
         base.add_lathe_obj(
             "p_kettle_helm",
             [(0.238, 0.81), (0.214, 0.84), (0.150, 0.88), (0.132, 0.96), (0.088, 1.03), (0.022, 1.07), (0.0, 1.075)],
@@ -873,29 +1029,38 @@ def build_sovereign_knight(pal) -> bpy.types.Object:
     body_pivot_w = Vector((0.0, 0.0, 0.14))
     pivot_body = base.make_empty("Pivot_Body_n", body_pivot_w, root)
 
-    # Lofted anatomical muscular rearing warhorse body & arched neck
+    # Anatomical High-Poly Subdivision-Smoothed Muscular Warhorse Body, Arched Neck & Tapered Muzzle
     horse_stations = [
-        ((0.0, 0.23, 0.37), 0.135, 0.125, -0.35, 0.0),
-        ((0.0, 0.06, 0.45), 0.148, 0.145, -0.05, 0.0),
-        ((0.0, -0.13, 0.50), 0.142, 0.145, 0.35, 0.0),
-        ((0.0, -0.22, 0.67), 0.105, 0.125, 0.72, 0.0),
-        ((0.0, -0.22, 0.85), 0.082, 0.102, 0.95, 0.0),
-        ((0.0, -0.30, 0.92), 0.064, 0.082, 1.38, 0.0),
-        ((0.0, -0.40, 0.84), 0.044, 0.054, 1.68, 0.0),
+        ((0.0, 0.25, 0.36), 0.132, 0.118, -0.42, 0.0),
+        ((0.0, 0.14, 0.43), 0.146, 0.136, -0.18, 0.0),
+        ((0.0, -0.04, 0.47), 0.152, 0.148, 0.08, 0.0),
+        ((0.0, -0.17, 0.54), 0.142, 0.152, 0.44, 0.0),
+        ((0.0, -0.23, 0.70), 0.108, 0.132, 0.74, 0.0),
+        ((0.0, -0.22, 0.86), 0.084, 0.106, 0.98, 0.0),
+        ((0.0, -0.29, 0.94), 0.072, 0.086, 1.32, 0.0),
+        ((0.0, -0.37, 0.89), 0.056, 0.068, 1.56, 0.0),
+        ((0.0, -0.45, 0.81), 0.036, 0.044, 1.72, 0.0),
     ]
     body_parts = [
-        add_lofted_obj("n_horse_loft", horse_stations, 20, pal["primary"], closed_loop=True, subsurf_levels=1),
-        base.add_primitive_obj("n_chamfron", "box", pal["gold"], loc=(0.0, -0.355, 0.885), rot=(-0.62, 0.0, 0.0), size=(0.108, 0.044, 0.20), bevel_width=0.008),
-        base.add_primitive_obj("n_chamfron_horn", "cone", pal["gold"], loc=(0.0, -0.395, 0.995), rot=(0.75, 0.0, 0.0), r_bot=0.024, height=0.14, segs=8),
-        base.add_primitive_obj("n_peytral", "sphere", pal["gold"], loc=(0.0, -0.26, 0.52), scale=(0.98, 0.58, 0.92), radius=0.148, segs=18),
-        base.add_tube_obj("n_mane", [(0.0, -0.10, 0.65), (0.0, -0.14, 0.82), (0.0, -0.20, 0.97), (0.0, -0.27, 0.99)], 0.034, pal["gold"], taper_end=True),
-        base.add_tube_obj("n_tail", [(0.0, 0.30, 0.50), (0.0, 0.39, 0.42), (0.0, 0.36, 0.24)], 0.038, pal["velvet"], taper_end=True),
+        add_lofted_obj("n_horse_loft", horse_stations, 28, pal["primary"], closed_loop=True, subsurf_levels=2),
+        # Lower Jaw, Cheekbone Crest, Ears & Nostrils
+        base.add_primitive_obj("n_jaw", "box", pal["secondary"], loc=(0.0, -0.38, 0.82), rot=(-0.78, 0.0, 0.0), size=(0.072, 0.046, 0.14), bevel_width=0.012),
+        base.add_primitive_obj("n_chamfron", "box", pal["gold"], loc=(0.0, -0.365, 0.895), rot=(-0.64, 0.0, 0.0), size=(0.108, 0.046, 0.21), bevel_width=0.008),
+        base.add_primitive_obj("n_chamfron_horn", "cone", pal["gold"], loc=(0.0, -0.40, 1.00), rot=(0.75, 0.0, 0.0), r_bot=0.024, height=0.145, segs=10),
+        base.add_primitive_obj("n_peytral", "sphere", pal["gold"], loc=(0.0, -0.26, 0.52), scale=(1.02, 0.62, 0.94), radius=0.152, segs=22),
         # Armored Crusader Saddle + High Cantle + Rider Torso
         base.add_primitive_obj("n_saddle", "box", pal["gold"], loc=(0.0, 0.05, 0.63), size=(0.255, 0.255, 0.084), bevel_width=0.012),
         base.add_primitive_obj("n_cantle", "box", pal["gold"], loc=(0.0, 0.16, 0.72), rot=(0.24, 0.0, 0.0), size=(0.23, 0.045, 0.14), bevel_width=0.008),
         base.add_primitive_obj("n_rider_torso", "cyl", pal["primary"], loc=(0.0, 0.05, 0.84), scale=(1.15, 0.88, 1.0), r_bot=0.122, r_top=0.136, height=0.33, segs=18, bevel_width=0.010),
         base.add_primitive_obj("n_rider_belt", "cyl", pal["gold"], loc=(0.0, 0.05, 0.73), scale=(1.15, 0.88, 1.0), r_bot=0.135, r_top=0.135, height=0.044, segs=18, bevel_width=0.005),
     ]
+    body_parts += build_mane_locks(pal)
+    for sx in (-1.0, 1.0):
+        body_parts.append(base.add_primitive_obj(f"n_ear_{sx}", "cone", pal["primary"], loc=(sx * 0.052, -0.26, 1.005), rot=(0.45, sx * -0.28, 0.0), r_bot=0.022, height=0.075, segs=8))
+        body_parts.append(base.add_primitive_obj(f"n_nostril_{sx}", "sphere", pal["recess"], loc=(sx * 0.028, -0.455, 0.805), radius=0.016, segs=8))
+        body_parts += add_gem_obj(f"n_horse_eye_{sx}", (sx * 0.058, -0.355, 0.905), 0.014, pal, rot=(0.2, sx * 0.4, 0.0), with_bezel=False)
+        body_parts.append(base.add_tube_obj(f"n_tail_braid_{sx}", [(0.0, 0.29, 0.49), (sx * 0.045, 0.39, 0.41), (sx * 0.025, 0.36, 0.23)], 0.022, pal["velvet"], taper_end=True))
+    body_parts.append(base.add_tube_obj("n_tail_core", [(0.0, 0.30, 0.50), (0.0, 0.41, 0.42), (0.0, 0.38, 0.21)], 0.032, pal["gold"], taper_end=True))
     body_parts += add_gem_obj("n_peytral_gem", (0.0, -0.35, 0.53), 0.028, pal, rot=(math.pi * 0.5, 0.0, 0.0))
     body_parts += build_pleated_cloak("n_rider_cloak", 0.94, 0.56, 0.135, 0.12, 0.195, 0.18, 0.07, 0.14, 5, pal)
     # 4 Articulated Legs (forelegs rearing slightly forward!) + Flank Scale Barding
@@ -1008,17 +1173,16 @@ def build_sovereign_bishop(pal) -> bpy.types.Object:
         ),
     ]
     body_parts += add_gem_obj("b_pectoral_gem", (0.0, -0.195, 0.88), 0.028, pal, rot=(math.pi * 0.5, 0.0, 0.0))
+    for ang in (-0.42, 0.42):
+        body_parts.append(base.add_tube_obj(f"b_filigree_arch_{ang}", [(math.sin(ang) * 0.26, -math.cos(ang) * 0.26, 0.20), (math.sin(ang) * 0.21, -math.cos(ang) * 0.21, 0.56), (math.sin(ang * 0.6) * 0.18, -math.cos(ang * 0.6) * 0.18, 0.92)], 0.011, pal["gold"]))
     body_parts += build_pleated_cloak("b_mantle", 0.99, 0.24, 0.195, 0.18, 0.265, 0.25, 0.04, 0.07, 9, pal)
     base.bake_parts_into_joint_mesh("Mesh_Body_b", body_parts, body_pivot_w, pivot_body)
 
-    # Head: Hierophant + Cleft Mitre + Rear Lappets + Radiant Aureole Halo
+    # Head: Hierophant + Sculpted Visage & Fluted Beard + Cleft Mitre + Rear Lappets + Radiant Halo
     head_pivot_w = Vector((0.0, 0.0, 1.04))
     pivot_head = base.make_empty("Pivot_Head_b", head_pivot_w - body_pivot_w, pivot_body)
     mitre_pts = [(-0.118, 0.16), (0.118, 0.16), (0.132, 0.31), (0.070, 0.51), (0.0, 0.35), (-0.070, 0.51), (-0.132, 0.31)]
-    head_parts = [
-        base.add_primitive_obj("b_head_core", "sphere", pal["primary"], loc=(0.0, 0.0, 1.15), radius=0.106, segs=18),
-        base.add_primitive_obj("b_beard", "cone", pal["secondary"], loc=(0.0, -0.070, 1.095), rot=(math.pi, 0.0, 0.0), r_bot=0.076, height=0.125, segs=14, bevel_width=0.008),
-        base.add_primitive_obj("b_eyes", "box", pal["recess"], loc=(0.0, -0.094, 1.17), size=(0.116, 0.042, 0.032)),
+    head_parts = build_sculpted_visage("b", Vector((0.0, 0.0, 1.145)), 0.105, pal, with_beard=True, beard_len=0.125) + [
         base.add_extruded_poly_obj("b_mitre", mitre_pts, depth=0.175, mat=pal["primary"], bevel_width=0.022, subsurf_levels=1, loc=(0.0, 0.0, 1.04), rot=(math.pi * 0.5, 0.0, -math.pi * 0.5)),
         base.add_primitive_obj("b_mitre_band", "cyl", pal["gold"], loc=(0.0, 0.0, 1.215), r_bot=0.130, r_top=0.132, height=0.034, segs=22, bevel_width=0.005),
     ]
@@ -1100,6 +1264,8 @@ def build_sovereign_queen(pal) -> bpy.types.Object:
         base.add_primitive_obj("q_girdle", "cyl", pal["gold"], loc=(0.0, 0.0, 0.88), r_bot=0.174, r_top=0.170, height=0.056, segs=24, bevel_width=0.006),
     ]
     body_parts += add_gem_obj("q_chest_gem", (0.0, -0.188, 1.04), 0.036, pal, rot=(math.pi * 0.5, 0.0, 0.0))
+    for ang in (-0.38, 0.38):
+        body_parts.append(base.add_tube_obj(f"q_corset_filigree_{ang}", [(math.sin(ang) * 0.295, -math.cos(ang) * 0.272, 0.22), (math.sin(ang) * 0.230, -math.cos(ang) * 0.210, 0.55), (math.sin(ang) * 0.174, -math.cos(ang) * 0.158, 0.88), (math.sin(ang * 0.5) * 0.222, -math.cos(ang * 0.5) * 0.204, 1.06)], 0.011, pal["gold"]))
     body_parts += build_pleated_cloak("q_train", 1.12, 0.20, 0.19, 0.17, 0.29, 0.27, 0.05, 0.09, 10, pal)
     # 4 Sculpted Golden Valkyrie Seraphim Wings fanning cleanly from rear back (+Y)
     for sx in (-1.0, 1.0):
@@ -1107,13 +1273,11 @@ def build_sovereign_queen(pal) -> bpy.types.Object:
         body_parts += build_wing_parts(Vector((sx * 0.11, 0.17, 0.88)), sx, 0.24, 0.20, 0.55, -0.06, pal)
     base.bake_parts_into_joint_mesh("Mesh_Body_q", body_parts, body_pivot_w, pivot_body)
 
-    # Head: Valkyrie Empress + 12-Spire Lily Crown + Sunburst Aureole
+    # Head: Valkyrie Empress + Sculpted Visage + 12-Spire Lily Crown + Sunburst Aureole
     head_pivot_w = Vector((0.0, 0.0, 1.19))
     pivot_head = base.make_empty("Pivot_Head_q", head_pivot_w - body_pivot_w, pivot_body)
-    head_parts = [
-        base.add_primitive_obj("q_head_core", "sphere", pal["primary"], loc=(0.0, 0.0, 1.30), radius=0.108, segs=18),
+    head_parts = build_sculpted_visage("q", Vector((0.0, 0.0, 1.295)), 0.106, pal, with_beard=False) + [
         base.add_primitive_obj("q_veil", "cyl", pal["velvet"], loc=(0.0, 0.092, 1.23), rot=(0.12, 0.0, 0.0), scale=(0.95, 0.45, 1.0), r_bot=0.142, r_top=0.104, height=0.25, segs=16, bevel_width=0.010),
-        base.add_primitive_obj("q_brow", "box", pal["recess"], loc=(0.0, -0.094, 1.315), size=(0.104, 0.038, 0.028)),
         base.add_primitive_obj("q_circlet", "cyl", pal["gold"], loc=(0.0, 0.0, 1.375), r_bot=0.116, r_top=0.132, height=0.058, segs=24, bevel_width=0.006),
         base.add_primitive_obj("q_coronet_cap", "sphere", pal["primary"], loc=(0.0, 0.0, 1.395), radius=0.104, segs=16),
         base.add_primitive_obj("q_apex_stem", "cyl", pal["gold"], loc=(0.0, 0.0, 1.54), r_bot=0.034, r_top=0.016, height=0.16, segs=10),
@@ -1198,6 +1362,8 @@ def build_sovereign_king(pal) -> bpy.types.Object:
     ]
     body_parts += add_gem_obj("k_medallion_gem", (0.0, -0.235, 1.09), 0.038, pal, rot=(math.pi * 0.5, 0.0, 0.0))
     body_parts += add_gem_obj("k_dorsal_gem", (0.0, 0.258, 1.18), 0.028, pal, rot=(math.pi * 0.5, 0.0, 0.0))
+    for ang in (-0.42, 0.42):
+        body_parts.append(base.add_tube_obj(f"k_cuirass_filigree_{ang}", [(math.sin(ang) * 0.285, -math.cos(ang) * 0.26, 0.22), (math.sin(ang) * 0.24, -math.cos(ang) * 0.21, 0.82), (math.sin(ang * 0.65) * 0.25, -math.cos(ang * 0.65) * 0.215, 1.18)], 0.012, pal["gold"]))
     # 11-Fold Deeply Pleated Billowing Sovereign Cloak + Golden Shoulder Pelisse Collar
     body_parts += build_pleated_cloak("k_sovereign_cloak", 1.27, 0.19, 0.23, 0.21, 0.34, 0.31, 0.05, 0.11, 11, pal)
     body_parts.append(
@@ -1208,13 +1374,10 @@ def build_sovereign_king(pal) -> bpy.types.Object:
         body_parts += build_wing_parts(Vector((sx * 0.22, 0.10, 1.24)), sx, 0.26, 0.20, 0.56, -0.12, pal)
     base.bake_parts_into_joint_mesh("Mesh_Body_k", body_parts, body_pivot_w, pivot_body)
 
-    # Head: High Sovereign Dragon-Emperor + 4-Arched Cathedral Crown + Halo + Orb & Cross
+    # Head: High Sovereign Dragon-Emperor + Sculpted Visage & Fluted Beard + 4-Arched Cathedral Crown + Halo + Orb & Cross
     head_pivot_w = Vector((0.0, 0.0, 1.32))
     pivot_head = base.make_empty("Pivot_Head_k", head_pivot_w - body_pivot_w, pivot_body)
-    head_parts = [
-        base.add_primitive_obj("k_head_core", "sphere", pal["primary"], loc=(0.0, 0.0, 1.445), radius=0.120, segs=18),
-        base.add_primitive_obj("k_beard", "cone", pal["secondary"], loc=(0.0, -0.078, 1.385), rot=(math.pi, 0.0, 0.0), r_bot=0.090, height=0.142, segs=14, bevel_width=0.008),
-        base.add_primitive_obj("k_visor", "box", pal["recess"], loc=(0.0, -0.106, 1.465), size=(0.128, 0.042, 0.034)),
+    head_parts = build_sculpted_visage("k", Vector((0.0, 0.0, 1.445)), 0.118, pal, with_beard=True, beard_len=0.140) + [
         base.add_primitive_obj("k_crown_circlet", "cyl", pal["gold"], loc=(0.0, 0.0, 1.53), r_bot=0.128, r_top=0.144, height=0.068, segs=24, bevel_width=0.006),
         base.add_primitive_obj("k_crown_cap", "sphere", pal["velvet"], loc=(0.0, 0.0, 1.555), radius=0.122, segs=16),
     ]

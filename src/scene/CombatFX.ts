@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import { THEMES } from '../themes';
-import { LegalMoveOption, PieceColor, PieceType, Square, ThemeId, squareToWorld } from '../types';
+import {
+  ArticulatedPiece,
+  LegalMoveOption,
+  PieceColor,
+  PieceType,
+  Square,
+  ThemeId,
+  squareToWorld,
+} from '../types';
 
 interface TransientVFX {
   group: THREE.Group;
@@ -13,7 +21,8 @@ interface TransientVFX {
 
 interface DebrisShard {
   mesh: THREE.Mesh;
-  material: THREE.MeshStandardMaterial;
+  materials: THREE.Material[];
+  ownsGeometry: boolean;
   velocity: THREE.Vector3;
   angularVelocity: THREE.Vector3;
   radius: number;
@@ -21,6 +30,13 @@ interface DebrisShard {
   age: number;
   lifetime: number;
   fadeStart: number;
+}
+
+interface ScorchDecal {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  age: number;
+  lifetime: number;
 }
 
 interface SmokePuff {
@@ -42,6 +58,7 @@ interface SmokePuff {
 export class CombatFX {
   private readonly scene: THREE.Scene;
   private readonly highlightGroup: THREE.Group;
+  private readonly scorchGroup: THREE.Group;
   private readonly checkGroup: THREE.Group;
   private readonly debrisGroup: THREE.Group;
 
@@ -50,6 +67,7 @@ export class CombatFX {
   private readonly quietMoveTex: THREE.CanvasTexture;
   private readonly captureMoveTex: THREE.CanvasTexture;
   private readonly checkHaloTex: THREE.CanvasTexture;
+  private readonly scorchTex: THREE.CanvasTexture;
 
   private readonly selectedMat: THREE.MeshBasicMaterial;
   private readonly quietMoveMat: THREE.MeshBasicMaterial;
@@ -76,7 +94,9 @@ export class CombatFX {
   private readonly shards: DebrisShard[] = [];
   private readonly smokePuffs: SmokePuff[] = [];
   private readonly transientVfx: TransientVFX[] = [];
+  private readonly scorchDecals: ScorchDecal[] = [];
   private readonly vfxGroup: THREE.Group;
+  private readonly gemSparkGeo: THREE.OctahedronGeometry;
 
   private selectedAuraGroup: THREE.Group | null = null;
   private selectedOuterRing: THREE.Mesh | null = null;
@@ -89,9 +109,11 @@ export class CombatFX {
     this.scene = scene;
 
     this.highlightGroup = new THREE.Group();
+    this.scorchGroup = new THREE.Group();
     this.checkGroup = new THREE.Group();
     this.debrisGroup = new THREE.Group();
     this.vfxGroup = new THREE.Group();
+    this.scene.add(this.scorchGroup);
     this.scene.add(this.highlightGroup);
     this.scene.add(this.checkGroup);
     this.scene.add(this.debrisGroup);
@@ -104,6 +126,8 @@ export class CombatFX {
     this.quietMoveTex = this.createQuietMoveTexture();
     this.captureMoveTex = this.createCaptureRingTexture();
     this.checkHaloTex = this.createCheckHaloTexture();
+    this.scorchTex = this.createScorchTexture();
+    this.gemSparkGeo = new THREE.OctahedronGeometry(0.042, 0);
 
     this.selectedMat = new THREE.MeshBasicMaterial({
       map: this.selectedTex,
@@ -137,6 +161,7 @@ export class CombatFX {
 
     this.checkHaloMat = new THREE.MeshBasicMaterial({
       map: this.checkHaloTex,
+      color: new THREE.Color(2.2, 2.2, 2.2),
       transparent: true,
       opacity: 0.9,
       blending: THREE.AdditiveBlending,
@@ -547,7 +572,8 @@ export class CombatFX {
   shatterPiece(
     worldPos: { x: number; z: number },
     victimColor: PieceColor,
-    attackerPos: { x: number; z: number }
+    attackerPos: { x: number; z: number },
+    victimPiece?: ArticulatedPiece
   ): void {
     let dirX = worldPos.x - attackerPos.x;
     let dirZ = worldPos.z - attackerPos.z;
@@ -562,13 +588,90 @@ export class CombatFX {
     const perpX = -dirZ;
     const perpZ = dirX;
 
-    // Spawn 24 angular 3D Voronoi-like chunks (18 body stone/ivory/obsidian + 6 gold trim shards)
-    const totalShards = 24;
+    this.spawnScorchDecal(worldPos);
+
+    // Extract actual detached sculpted limbs/head/weapon/crown parts from the victim rig
+    if (victimPiece) {
+      victimPiece.root.updateMatrixWorld(true);
+      const candidateGroups: Array<{ grp?: THREE.Group; limit: number }> = [
+        { grp: victimPiece.head, limit: 1 },
+        { grp: victimPiece.weaponArm, limit: 1 },
+        { grp: victimPiece.shieldArm, limit: 1 },
+        { grp: victimPiece.body, limit: 2 },
+      ];
+      const wPos = new THREE.Vector3();
+      const wQuat = new THREE.Quaternion();
+      const wScale = new THREE.Vector3();
+      let spawnedRelics = 0;
+
+      for (const { grp, limit } of candidateGroups) {
+        if (!grp) continue;
+        let picked = 0;
+        grp.traverse((node) => {
+          if (picked >= limit || spawnedRelics >= 5) return;
+          const srcMesh = node as THREE.Mesh;
+          if (!srcMesh.isMesh || !srcMesh.geometry) return;
+
+          const srcMats = Array.isArray(srcMesh.material)
+            ? srcMesh.material
+            : [srcMesh.material];
+          const clonedMats = srcMats.map((m) => {
+            const c = m.clone();
+            c.transparent = true;
+            c.opacity = 1;
+            return c;
+          });
+
+          const frag = new THREE.Mesh(
+            srcMesh.geometry,
+            Array.isArray(srcMesh.material) ? clonedMats : clonedMats[0]
+          );
+          srcMesh.matrixWorld.decompose(wPos, wQuat, wScale);
+          frag.position.copy(wPos);
+          frag.quaternion.copy(wQuat);
+          frag.scale.copy(wScale).multiplyScalar(0.84);
+          frag.castShadow = true;
+          frag.receiveShadow = true;
+
+          const sideJitter = (Math.random() - 0.5) * 4.4;
+          const forwardSpd = 2.0 + Math.random() * 2.8;
+          const upSpd = 2.8 + Math.random() * 3.0;
+          const lifetime = 2.25 + Math.random() * 0.45;
+
+          this.debrisGroup.add(frag);
+          this.shards.push({
+            mesh: frag,
+            materials: clonedMats,
+            ownsGeometry: false,
+            velocity: new THREE.Vector3(
+              dirX * forwardSpd + perpX * sideJitter,
+              upSpd,
+              dirZ * forwardSpd + perpZ * sideJitter
+            ),
+            angularVelocity: new THREE.Vector3(
+              (Math.random() - 0.5) * 14,
+              (Math.random() - 0.5) * 14,
+              (Math.random() - 0.5) * 14
+            ),
+            radius: 0.14,
+            baseScale: frag.scale.x,
+            age: 0,
+            lifetime,
+            fadeStart: lifetime - 0.8,
+          });
+          picked += 1;
+          spawnedRelics += 1;
+        });
+      }
+    }
+
+    // Spawn 16 angular 3D Voronoi chunks + 8 glowing HDR arcane crystal sparks
+    const totalShards = 16;
     const bodyBaseMat =
       victimColor === 'w' ? this.ivoryShardBaseMat : this.obsidianShardBaseMat;
 
     for (let i = 0; i < totalShards; i++) {
-      const isGold = i >= 18;
+      const isGold = i >= 12;
       const geo = this.shardGeometries[i % this.shardGeometries.length];
       const mat = (isGold ? this.goldShardBaseMat : bodyBaseMat).clone();
 
@@ -590,7 +693,6 @@ export class CombatFX {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
-      // Directional knockback impulse away from attacker + radial scatter + upward pop
       const forwardSpeed = 2.1 + Math.random() * 3.4;
       const sideSpeed = (Math.random() - 0.5) * 3.8;
       const upSpeed = 2.2 + Math.random() * 3.4;
@@ -613,7 +715,8 @@ export class CombatFX {
       this.debrisGroup.add(mesh);
       this.shards.push({
         mesh,
-        material: mat,
+        materials: [mat],
+        ownsGeometry: false,
         velocity,
         angularVelocity,
         radius: 0.08 * scale,
@@ -621,6 +724,48 @@ export class CombatFX {
         age: 0,
         lifetime,
         fadeStart,
+      });
+    }
+
+    const themeVfx = THEMES[this.currentTheme].combatVfx;
+    for (let i = 0; i < 8; i++) {
+      const sparkMat = new THREE.MeshStandardMaterial({
+        color: themeVfx.magicHex,
+        emissive: themeVfx.magicHex,
+        emissiveIntensity: 2.6,
+        roughness: 0.12,
+        transparent: true,
+        opacity: 1,
+      });
+      const sparkMesh = new THREE.Mesh(this.gemSparkGeo, sparkMat);
+      const scale = 0.65 + Math.random() * 0.55;
+      sparkMesh.scale.setScalar(scale);
+      sparkMesh.position.set(
+        worldPos.x + (Math.random() - 0.5) * 0.28,
+        0.3 + Math.random() * 0.75,
+        worldPos.z + (Math.random() - 0.5) * 0.28
+      );
+      const forwardSpeed = 1.6 + Math.random() * 4.2;
+      const sideSpeed = (Math.random() - 0.5) * 4.6;
+      const upSpeed = 2.8 + Math.random() * 3.6;
+      const lifetime = 1.35 + Math.random() * 0.35;
+
+      this.debrisGroup.add(sparkMesh);
+      this.shards.push({
+        mesh: sparkMesh,
+        materials: [sparkMat],
+        ownsGeometry: false,
+        velocity: new THREE.Vector3(
+          dirX * forwardSpeed + perpX * sideSpeed,
+          upSpeed,
+          dirZ * forwardSpeed + perpZ * sideSpeed
+        ),
+        angularVelocity: new THREE.Vector3(12, 16, 10),
+        radius: 0.04 * scale,
+        baseScale: scale,
+        age: 0,
+        lifetime,
+        fadeStart: lifetime - 0.55,
       });
     }
 
@@ -672,10 +817,36 @@ export class CombatFX {
     }
   }
 
+  private spawnScorchDecal(worldPos: { x: number; z: number }): void {
+    while (this.scorchDecals.length >= 8) {
+      const oldest = this.scorchDecals.shift();
+      if (oldest) {
+        this.scorchGroup.remove(oldest.mesh);
+        oldest.material.dispose();
+      }
+    }
+    const themeVfx = THEMES[this.currentTheme].combatVfx;
+    const mat = new THREE.MeshBasicMaterial({
+      map: this.scorchTex,
+      color: new THREE.Color(themeVfx.magicHex).lerp(new THREE.Color(0xffffff), 0.32),
+      transparent: true,
+      opacity: 0.88,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+    });
+    const mesh = new THREE.Mesh(this.planeGeo, mat);
+    mesh.position.set(worldPos.x, 0.0055, worldPos.z);
+    mesh.rotation.y = Math.random() * Math.PI * 2;
+    mesh.scale.set(0.92, 1, 0.92);
+    this.scorchGroup.add(mesh);
+    this.scorchDecals.push({ mesh, material: mat, age: 0, lifetime: 18.0 });
+  }
+
   clearDebris(): void {
     for (const shard of this.shards) {
       this.debrisGroup.remove(shard.mesh);
-      shard.material.dispose();
+      shard.materials.forEach((m) => m.dispose());
     }
     this.shards.length = 0;
 
@@ -691,6 +862,12 @@ export class CombatFX {
       fx.materials.forEach((m) => m.dispose());
     }
     this.transientVfx.length = 0;
+
+    for (const dec of this.scorchDecals) {
+      this.scorchGroup.remove(dec.mesh);
+      dec.material.dispose();
+    }
+    this.scorchDecals.length = 0;
   }
 
   getActiveDebrisCount(): number {
@@ -722,6 +899,19 @@ export class CombatFX {
       this.selectedInnerRing.rotation.z = -this.elapsed * 1.6;
       const auraScale = 1 + Math.sin(this.elapsed * 3.8) * 0.045;
       this.selectedAuraGroup.scale.set(auraScale, 1, auraScale);
+    }
+
+    for (let i = this.scorchDecals.length - 1; i >= 0; i--) {
+      const dec = this.scorchDecals[i];
+      dec.age += clampedDt;
+      if (dec.age >= dec.lifetime) {
+        this.scorchGroup.remove(dec.mesh);
+        dec.material.dispose();
+        this.scorchDecals.splice(i, 1);
+      } else {
+        const t = dec.age / dec.lifetime;
+        dec.material.opacity = 0.88 * Math.pow(1 - t, 1.35);
+      }
     }
 
     // Step transient weapon & landing VFX
@@ -761,7 +951,7 @@ export class CombatFX {
 
       if (s.age >= s.lifetime) {
         this.debrisGroup.remove(s.mesh);
-        s.material.dispose();
+        s.materials.forEach((m) => m.dispose());
         this.shards.splice(i, 1);
         continue;
       }
@@ -794,7 +984,9 @@ export class CombatFX {
       if (s.age > s.fadeStart) {
         const fadeT = (s.age - s.fadeStart) / (s.lifetime - s.fadeStart);
         const remain = Math.max(0, 1 - fadeT);
-        s.material.opacity = remain;
+        for (const mat of s.materials) {
+          mat.opacity = remain;
+        }
         s.mesh.scale.setScalar(s.baseScale * (0.25 + 0.75 * remain));
       }
     }
@@ -832,6 +1024,7 @@ export class CombatFX {
     this.setCheckIndicator(null, false);
     this.clearDebris();
 
+    this.scene.remove(this.scorchGroup);
     this.scene.remove(this.highlightGroup);
     this.scene.remove(this.checkGroup);
     this.scene.remove(this.debrisGroup);
@@ -839,6 +1032,7 @@ export class CombatFX {
 
     this.planeGeo.dispose();
     this.smokeGeo.dispose();
+    this.gemSparkGeo.dispose();
     for (const g of this.shardGeometries) {
       g.dispose();
     }
@@ -848,6 +1042,7 @@ export class CombatFX {
     this.quietMoveTex.dispose();
     this.captureMoveTex.dispose();
     this.checkHaloTex.dispose();
+    this.scorchTex.dispose();
 
     this.selectedMat.dispose();
     this.quietMoveMat.dispose();
@@ -1053,6 +1248,48 @@ export class CombatFX {
     ctx.strokeStyle = 'rgba(255, 130, 100, 0.85)';
     ctx.lineWidth = 4;
     ctx.stroke();
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  private createScorchTexture(): THREE.CanvasTexture {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+
+    // Deep charred crater radial core
+    const blast = ctx.createRadialGradient(128, 128, 8, 128, 128, 114);
+    blast.addColorStop(0, 'rgba(18, 12, 10, 0.92)');
+    blast.addColorStop(0.45, 'rgba(32, 20, 14, 0.72)');
+    blast.addColorStop(0.78, 'rgba(40, 24, 18, 0.28)');
+    blast.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = blast;
+    ctx.fillRect(0, 0, size, size);
+
+    // 9 radiating arcane fissure cracks glowing warmly in the stone
+    for (let i = 0; i < 9; i++) {
+      let ang = (i / 9) * Math.PI * 2 + 0.2;
+      let cx = 128;
+      let cy = 128;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      for (let s = 0; s < 5; s++) {
+        ang += Math.sin(i * 3.1 + s * 1.9) * 0.42;
+        const step = 14 + ((i + s) % 3) * 6;
+        cx += Math.cos(ang) * step;
+        cy += Math.sin(ang) * step;
+        ctx.lineTo(cx, cy);
+      }
+      ctx.strokeStyle = 'rgba(255, 196, 120, 0.85)';
+      ctx.lineWidth = 3.2;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = '#FFFFFF';
+      ctx.stroke();
+    }
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
